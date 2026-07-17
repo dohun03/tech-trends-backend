@@ -20,6 +20,11 @@ export class ApiController {
     return this.apiService.getTrends({ page, limit, search, source, sort });
   }
 
+  @Get('trends/sources')
+  async getSources() {
+    return this.apiService.getUniqueSources();
+  }
+
   @Get('test-scraping')
   async triggerScrapingTest() {
     await this.trendsService.collectAndProcessTrends();

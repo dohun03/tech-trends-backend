@@ -63,4 +63,13 @@ export class ApiService {
       },
     };
   }
+
+  async getUniqueSources(): Promise<string[]> {
+    const result = await this.techTrendRepository
+      .createQueryBuilder('trend')
+      .select('DISTINCT trend.source', 'source')
+      .getRawMany();
+
+    return result.map(item => item.source).filter(Boolean);
+  }
 }
