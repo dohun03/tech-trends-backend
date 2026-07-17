@@ -16,7 +16,7 @@ import { TechTrend } from './entities/tech-trend.entity';
         database: configService.get<string>('DB_DATABASE'),
         entities: [TechTrend],
         synchronize: false,
-        logging: true,
+        logging: false,
       }),
     }),
   ],

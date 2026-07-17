@@ -20,7 +20,7 @@ export class ApiService {
   }) {
     // 파라미터 기본값 정제
     const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 3;
+    const limit = Number(query.limit) || 5;
     const search = query.search || '';
     const source = query.source || 'ALL';
     const sort = query.sort === 'ASC' ? 'ASC' : 'DESC';
