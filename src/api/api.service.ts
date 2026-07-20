@@ -16,6 +16,7 @@ export class ApiService {
     limit?: number;
     search?: string;
     source?: string;
+    isNew?: string;
     sort?: 'ASC' | 'DESC';
   }) {
     // 파라미터 기본값 정제
@@ -24,6 +25,7 @@ export class ApiService {
     const search = query.search || '';
     const source = query.source || 'ALL';
     const sort = query.sort === 'ASC' ? 'ASC' : 'DESC';
+    const isNew = query.isNew === 'true';
 
     const queryBuilder = this.techTrendRepository.createQueryBuilder('trend');
 
@@ -39,6 +41,13 @@ export class ApiService {
       );
     }
 
+    // 오늘 수집한 데이터만 조회
+    if (isNew) {
+      queryBuilder
+        .andWhere('trend.mined_at >= CURDATE()')
+        .andWhere('trend.mined_at < CURDATE() + INTERVAL 1 DAY');
+    }
+
     // 정렬 및 페이지네이션 설계
     queryBuilder
       .orderBy('trend.created_at', sort)
@@ -47,18 +56,17 @@ export class ApiService {
       .take(limit);
 
     // 조회 실행
-    const [data, totalItems] = await queryBuilder.getManyAndCount();
+    const [data, totalCount] = await queryBuilder.getManyAndCount();
 
     // 메타데이터 조립 및 반환
-    const totalPages = Math.ceil(totalItems / limit);
+    const totalPages = Math.ceil(totalCount / limit);
 
     return {
       data,
       meta: {
-        totalItems,
-        itemCount: data.length,
-        itemsPerPage: limit,
+        totalCount,
         totalPages,
+        itemsPerPage: limit,
         currentPage: page,
       },
     };
