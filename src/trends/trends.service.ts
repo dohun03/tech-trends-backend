@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DevToScraper } from './scrapers/devto.scraper';
-// import { GoogleGenAI } from '@google/genai';
 import { TechTrend } from 'database/entities/tech-trend.entity';
 import Groq from 'groq-sdk';
 
@@ -11,6 +10,13 @@ export class TrendsService {
   private readonly logger = new Logger(TrendsService.name);
   private groq: Groq;
   private isProcessing = false;
+
+  // 파이프라인 수집 설정값
+  private readonly TARGET_COUNT = 15; // 최종 저장할 개수
+  private readonly LIMIT = 30; // 일단 긁어올 본문의 개수
+  private readonly MIN_REACTIONS = 20; // 최소 좋아요 개수
+  private readonly MIN_COMMENTS = 1; // 최소 댓글 개수
+  private readonly MAX_SKIP_PAGES = 5; // 최대 5페이지까지 스킵
 
   constructor(
     private readonly devToScraper: DevToScraper,
@@ -29,56 +35,58 @@ export class TrendsService {
   // 외부 소스(DEV.to)에서 인기 글을 가져와 가공 후 DB에 저장
   async collectAndProcessTrends() {
     if (this.isProcessing) {
-      this.logger.warn('⚠️ 이미 수집 파이프라인이 실행 중입니다. 중복 요청을 무시합니다.');
+      this.logger.warn('이미 수집 파이프라인이 실행 중입니다. 중복 요청을 무시합니다.');
       return;
     }
 
-    const TARGET_COUNT = 15;
     const processedUrls: string[] = []; // 저장된 글 목록의 URL 배열
     let currentPage = 1;
-    let SkitCount = 0;
+    let skipCount = 0;
 
     try {
       this.isProcessing = true;
-      this.logger.log(`====== 신규 트렌드 ${TARGET_COUNT}개 수집 파이프라인 시작 ======`);
+      this.logger.log(`====== 신규 트렌드 목표 ${this.TARGET_COUNT}개 수집 시작 ======`);
 
       // 목표 개수를 다 채우거나, 연속 5페이지가 전부 중복일 때까지 반복
-      while (processedUrls.length < TARGET_COUNT && SkitCount < 5) {
-        const articles = await this.devToScraper.getTrendingArticles(10, currentPage);
-        if (!articles || articles.length === 0) {
-          this.logger.error('❌ 더 이상 수집할 목록 데이터가 존재하지 않습니다.');
-          break;
-        }
+      while (processedUrls.length < this.TARGET_COUNT && skipCount < this.MAX_SKIP_PAGES) {
+      
+      // 스크래퍼 호출
+      const articles = await this.devToScraper.getTrendingArticles({
+        page: currentPage,
+        limit: this.LIMIT,
+        minReactions: this.MIN_REACTIONS,
+        minComments: this.MIN_COMMENTS,
+      });
 
         let newArticlesInThisPageCount = 0; // 이번 페이지의 신규 글 개수
 
         for (const article of articles) {
-          if (processedUrls.length >= TARGET_COUNT) break;
+          // 목표 개수(TARGET_COUNT) 채우면 즉시 중단
+          if (processedUrls.length >= this.TARGET_COUNT) break;
 
           try {
             // DB 중복 체크
             const isExist = await this.techTrendRepository.findOne({
-              where: { link_url: article.url }
+              where: { link_url: article.url },
             });
             if (isExist) {
-              this.logger.log(`[스킵] 이미 수집된 링크입니다: ${article.title}`);
-              await this.delay(1000);
+              this.logger.log(`이미 수집된 링크 스킵: ${article.title}`);
               continue;
             }
 
-            // 본문 스크래핑
+            // 본문 수집
             const content = await this.devToScraper.getArticleContent(article.id);
-            if (!content || content === '본문 유실됨' || content === '') {
-              this.logger.warn(`[본문 없음] ID: ${article.id} 글은 본문이 없어 요약을 건너뜁니다.`);
+            if (!content || content === '') {
+              this.logger.warn(`ID: ${article.id} 글은 본문이 없어 요약을 건너뜁니다.`);
               continue;
             }
 
-            // Gemini에게 한글 요약 및 기술 태그 추출 요청
-            this.logger.log(`[AI 분석 중] 제목: ${article.title}`);
+            // AI 요약
+            this.logger.log(`AI 분석 중: ${article.title}`);
             const aiResult = await this.summarizeArticleWithAi(article.title, content);
             if (!aiResult) {
-              this.logger.error(`❌ [AI 실패 스킵] 요약 실패로 패스: ${article.title}`);
-              continue; 
+              this.logger.error(`AI 요약 실패로 패스: ${article.title}`);
+              continue;
             }
 
             // DB 저장
@@ -95,22 +103,22 @@ export class TrendsService {
             processedUrls.push(article.url);
             newArticlesInThisPageCount++;
 
-            this.logger.log(`저장 완료 (${processedUrls.length}/${TARGET_COUNT}): ${aiResult.title}`);
-            this.logger.log(`[대기] 다음 작업을 위해 5초 동안 대기합니다...`);
-            await this.delay(5000);
+            this.logger.log(`저장 완료 (${processedUrls.length}/${this.TARGET_COUNT}): ${aiResult.title}`);
+            this.logger.log(`다음 작업을 위해 2초 대기...`);
+            await this.delay(2000);
 
           } catch (error) {
             this.logger.error(`글 처리 중 에러 발생: ${article.title}`, error);
-            await this.delay(5000);
+            await this.delay(2000);
           }
         }
 
-        // 만약 한 페이지에서 긁어온 글이 하나도 없다면
+        // 이번 페이지에서 1개도 저장하지 못했으면 스킵 카운트 증가
         if (newArticlesInThisPageCount === 0) {
-          SkitCount++;
-          this.logger.warn(`[경고] ${currentPage}페이지는 모든 글이 중복이었습니다. (누적 전체스킵: ${SkitCount}/5)`);
+          skipCount++;
+          this.logger.warn(`${currentPage}페이지는 신규 저장된 글이 없었습니다. (누적 스킵: ${skipCount}/${this.MAX_SKIP_PAGES})`);
         } else {
-          SkitCount = 0; // 하나라도 긁어왔으면 카운터 초기화
+          skipCount = 0;
         }
 
         currentPage++;
@@ -127,7 +135,7 @@ export class TrendsService {
     title: string, 
     content: string, 
     retries = 2, 
-    waitTime = 30000 // 기본 30초 대기
+    waitTime = 15000, 
   ): Promise<{ title: string, summary: string[]; tags: string | null } | null> {
     try {
       return await this.executeGroqCall(title, content);
@@ -137,13 +145,13 @@ export class TrendsService {
 
       if (is429 && retries > 0) {
         this.logger.warn(
-          `⚠️ [429 Quota] API 한도 초과. ${waitTime / 1000}초 대기 후 재시도합니다. (남은 기회: ${retries}회)`
+          `API 한도 초과. ${waitTime / 1000}초 대기 후 재시도합니다. (남은 기회: ${retries}회)`
         );
         await this.delay(waitTime);
-        return this.summarizeArticleWithAi(title, content, retries - 1, waitTime * 1.5);
+        return this.summarizeArticleWithAi(title, content, retries - 1, waitTime);
       }
 
-      this.logger.error(`❌ AI 요약 최종 실패 (${title}): ${error.message || JSON.stringify(error)}`);
+      this.logger.error(`AI 요약 최종 실패 (${title}): ${error.message || JSON.stringify(error)}`);
       return null;
     }
   }
