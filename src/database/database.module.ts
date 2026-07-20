@@ -17,6 +17,8 @@ import { TechTrend } from './entities/tech-trend.entity';
         entities: [TechTrend],
         synchronize: false,
         logging: false,
+        timezone: '+09:00',
+        dateStrings: true,
       }),
     }),
   ],

@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { DevToScraper } from './scrapers/devto.scraper';
 import { TechTrend } from 'database/entities/tech-trend.entity';
 import Groq from 'groq-sdk';
+import { Cron, CronExpression } from '@nestjs/schedule';
 
 @Injectable()
 export class TrendsService {
@@ -16,7 +17,7 @@ export class TrendsService {
   private readonly LIMIT = 30; // 일단 긁어올 본문의 개수
   private readonly MIN_REACTIONS = 20; // 최소 좋아요 개수
   private readonly MIN_COMMENTS = 1; // 최소 댓글 개수
-  private readonly MAX_SKIP_PAGES = 5; // 최대 5페이지까지 스킵
+  private readonly MAX_SKIP_PAGES = 3; // 최대 스킵 페이지
 
   constructor(
     private readonly devToScraper: DevToScraper,
@@ -26,6 +27,16 @@ export class TrendsService {
     this.groq = new Groq({
       apiKey: process.env.GROQ_API_KEY,
     });
+  }
+
+  // 특정 시간에 자동 실행(분 시 일 월 요일)
+  @Cron('0 1 * * *', {
+    name: 'devto-trends-collector',
+    timeZone: 'Asia/Seoul',
+  })
+  async handleDailyTrendsCron() {
+    this.logger.log('Cron : 수집 배치 작업을 시작합니다.');
+    await this.collectAndProcessTrends();
   }
 
   private delaySeconds(seconds: number) {
@@ -47,7 +58,7 @@ export class TrendsService {
       this.isProcessing = true;
       this.logger.log(`====== 신규 트렌드 목표 ${this.TARGET_COUNT}개 수집 시작 ======`);
 
-      // 목표 개수를 다 채우거나, 연속 5페이지가 전부 중복일 때까지 반복
+      // 목표 개수를 다 채우거나, 연속 MAX_SKIP_PAGES 페이지가 전부 중복일 때까지 반복
       while (processedUrls.length < this.TARGET_COUNT && skipCount < this.MAX_SKIP_PAGES) {
       
       // 스크래퍼 호출
