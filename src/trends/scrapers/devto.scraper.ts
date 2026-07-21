@@ -18,22 +18,20 @@ export class DevToScraper {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   };
 
-  // DEV.to에서 트렌딩(인기) 글 목록 조회
+  // DEV.to에서 1주일 트렌딩(인기) 글 목록 조회
   async getTrendingArticles(options: FetchDevToOptions = {}): Promise<
     Array<{ id: number; title: string; url: string; created_at: string }>
   > {
     const {
-      page = 1,
-      limit = 30,
       minReactions = 10,
       minComments = 1,
     } = options;
 
     try {
-      this.logger.log(`DEV.to 인기 글 목록 조회 중... (페이지: ${page}, 요청 개수: ${limit}개)`);
+      this.logger.log(`DEV.to 인기 글 목록 조회 중... (요청 개수: 100개)`);
       
       const response = await axios.get(
-        `${this.DEVTO_API_URL}?top=7&per_page=${limit}&page=${page}`,
+        `${this.DEVTO_API_URL}?top=7&per_page=100`,
         {
           headers: this.HEADERS,
           timeout: 5000,
@@ -42,16 +40,17 @@ export class DevToScraper {
       const articles = response.data;
       if (!Array.isArray(articles)) return [];
 
-      // 좋아요(minReactions) 및 댓글(minComments) 필터링
+      // 좋아요/댓글 필터링
       const filteredArticles = articles.filter((article: any) => {
         const reactions = article.positive_reactions_count || 0;
         const comments = article.comments_count || 0;
         return reactions >= minReactions && comments >= minComments;
       });
 
-      this.logger.log(
-        `DEV.to 원본 ${articles.length}개 중 ${filteredArticles.length}개 글이 품질 필터(좋아요 ${minReactions}+, 댓글 ${minComments}+)를 통과했습니다.`,
-      );
+      // 좋아요 순으로 내림차순 정렬
+      filteredArticles.sort((a: any, b: any) => (b.positive_reactions_count || 0) - (a.positive_reactions_count || 0));
+
+      this.logger.log(`DEV.to 원본 글 ${articles.length}개 중 ${filteredArticles.length}개 글이 품질 필터를 통과했습니다.`);
 
       return filteredArticles.map((article: any) => ({
         id: article.id,

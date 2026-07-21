@@ -21,11 +21,9 @@ export class TrendsService {
   private isProcessing = false;
 
   // 파이프라인 수집 설정값
-  private readonly TARGET_COUNT = 15; // 최종 저장할 개수
-  private readonly LIMIT = 30; // 일단 긁어올 본문의 개수
+  private readonly TARGET_COUNT = 10; // 최종 저장할 개수
   private readonly MIN_REACTIONS = 10; // 최소 좋아요 개수
   private readonly MIN_COMMENTS = 1; // 최소 댓글 개수
-  private readonly MAX_SKIP_PAGES = 3; // 최대 스킵 페이지
 
   constructor(
     private readonly devToScraper: DevToScraper,
@@ -75,26 +73,21 @@ export class TrendsService {
       return;
     }
 
-    const processedUrls: string[] = []; // 저장된 글 목록의 URL 배열
-    let currentPage = 1;
-    let skipCount = 0;
+    let savedCount = 0;
+    this.isProcessing = true;
 
     try {
-      this.isProcessing = true;
-      this.logger.log(`====== 신규 트렌드 목표 ${this.TARGET_COUNT}개 수집 시작 ======`);
-
-      // 목표 개수를 다 채우거나, 연속 MAX_SKIP_PAGES 페이지가 전부 중복일 때까지 반복
-      while (processedUrls.length < this.TARGET_COUNT && skipCount < this.MAX_SKIP_PAGES) {
-      
       // 스크래퍼 호출
       const articles = await this.devToScraper.getTrendingArticles({
-        page: currentPage,
-        limit: this.LIMIT,
         minReactions: this.MIN_REACTIONS,
         minComments: this.MIN_COMMENTS,
       });
+      if (articles.length === 0) {
+        this.logger.warn('불러온 글이 없습니다.');
+        return;
+      }
 
-      // DB 중복 체크를 위해 해당하는 URL 조회
+      // DB 중복 글 필터링
       const articleUrls = articles.map((article) => article.url);
       const existingTrends = await this.techTrendRepository.find({
         where: { link_url: In(articleUrls) },
@@ -103,120 +96,72 @@ export class TrendsService {
         },
       });
       const existingUrlSet = new Set(existingTrends.map((trend) => trend.link_url));
+      const filteredArticles = articles.filter(
+        (article) => !existingUrlSet.has(article.url)
+      );
 
-      let newArticlesInThisPageCount = 0; // 이번 페이지의 신규 글 개수
+      this.logger.log(`====== 글 ${filteredArticles.length}개 수집 시작, 최대: ${this.TARGET_COUNT}개 ======`);
+      // 필터링된 글 순회
+      for (const article of filteredArticles) {
+        if (savedCount >= this.TARGET_COUNT) break;
 
-        for (const article of articles) {
-          // 목표 개수(TARGET_COUNT) 채우면 즉시 중단
-          if (processedUrls.length >= this.TARGET_COUNT) break;
-
-          let isApiCalled = false; // 외부 API를 찔렀는지 여부
-
-          try {
-
-            // DB 중복 체크
-            if (existingUrlSet.has(article.url)) {
-              this.logger.log(`이미 수집된 링크 스킵, 제목: ${article.title}`);
-              continue;
-            }
-
-            isApiCalled = true;
-
-            // 본문 수집
-            const content = await this.devToScraper.getArticleContent(article.id);
-            if (!content || content === '') {
-              this.logger.warn(`ID: ${article.id} 글은 본문이 없어 요약을 건너뜁니다.`);
-              continue;
-            }
-
-            // 본문 전처리
-            const sanitizedContent = this.sanitizeContent(content);
-
-            // AI 요약
-            const aiResult = await this.handleArticleSummary(article.title, sanitizedContent);
-
-            if (!aiResult) {
-              this.logger.warn(`AI 요약 실패 스킵, 제목: ${article.title}`);
-              continue;
-            }
-
-            if (!aiResult.is_valuable) {
-              this.logger.warn(`정보 가치가 없는 글 스킵, 제목: ${article.title}`);
-              continue;
-            }
-
-            // DB 저장
-            const trendEntity = this.techTrendRepository.create({
-              title: aiResult.title,
-              link_url: article.url,
-              summary: aiResult.summary,
-              technical_tags: aiResult.tags,
-              source: 'dev.to',
-              created_at: new Date(article.created_at),
-            });
-            await this.techTrendRepository.save(trendEntity);
-
-            processedUrls.push(article.url);
-            newArticlesInThisPageCount++;
-
-            this.logger.log(`저장 완료, (${processedUrls.length}/${this.TARGET_COUNT}): ${aiResult.title}`);
-
-          } catch (error) {
-            this.logger.error(`글 처리 중 에러 발생: ${article.title}`, error);
-          } finally {
-            if (isApiCalled) {
-              this.logger.log(`다음 작업을 위해 3초 대기...`);
-              await this.delaySeconds(3);
-            }
+        try {
+          // 본문 수집
+          const content = await this.devToScraper.getArticleContent(article.id);
+          if (!content || content === '') {
+            this.logger.warn(`ID: ${article.id} 글은 본문이 없어 요약을 건너뜁니다.`);
+            continue;
           }
-        }
 
-        // 이번 페이지에서 1개도 저장하지 못했으면 스킵 카운트 증가
-        if (newArticlesInThisPageCount === 0) {
-          skipCount++;
-          this.logger.warn(`${currentPage}페이지는 신규 저장된 글이 없었습니다. (누적 스킵: ${skipCount}/${this.MAX_SKIP_PAGES})`);
-        } else {
-          skipCount = 0;
-        }
+          // 본문 전처리
+          const sanitizedContent = this.sanitizeContent(content);
 
-        currentPage++;
+          // AI 요약
+          const aiResult = await this.handleArticleAiSummary(article.title, sanitizedContent);
+
+          if (!aiResult) {
+            this.logger.warn(`AI 요약 실패로 인한 중단`);
+            break;
+          }
+
+          if (!aiResult.is_valuable) {
+            this.logger.warn(`정보 가치가 없는 글 스킵, 제목: ${article.title}`);
+            continue;
+          }
+
+          // DB 저장
+          const trendEntity = this.techTrendRepository.create({
+            title: aiResult.title,
+            link_url: article.url,
+            summary: aiResult.summary,
+            technical_tags: aiResult.tags,
+            source: 'dev.to',
+            created_at: new Date(article.created_at),
+          });
+          await this.techTrendRepository.save(trendEntity);
+
+          savedCount++;
+
+          this.logger.log(`저장 완료, (${savedCount}/${this.TARGET_COUNT}): ${aiResult.title}`);
+
+        } catch (error) {
+          this.logger.error(`글 처리 중 에러 발생: ${article.title}`, error);
+        } finally {
+          this.logger.log(`다음 작업을 위해 3초 대기...`);
+          await this.delaySeconds(3);
+        }
       }
-
     } finally {
       this.isProcessing = false;
-      this.logger.log(`====== 전체 파이프라인 처리 완료 (${processedUrls.length}개) ======`);
+      this.logger.log(`====== 글 수집 완료, 총: (${savedCount}개) ======`);
     }
   }
 
-  // AI 요약 + 에러 처리 로직
-  private async handleArticleSummary(
-    title: string, 
-    content: string, 
-    retries = 2, 
-    waitTime = 30, 
-  ): Promise<AiSummaryResponse | null> {
-    try {
-      this.logger.log(`AI 분석 중: ${title}`);
-      return await this.executeAiSummary(title, content);
-    } catch (error: any) {
-      
-      const is429 = error.status === 429 || error.error?.code === 429 || error.error?.status === 'RESOURCE_EXHAUSTED';
+  // AI 요약 로직
+  private async handleArticleAiSummary(title: string, content: string): Promise<AiSummaryResponse | null> {
+    const maxRetries = 2;
+    const waitTime = 30;
 
-      if (is429 && retries > 0) {
-        this.logger.warn(
-          `API 한도 초과. ${waitTime}초 대기 후 재시도합니다. (남은 기회: ${retries}회)`
-        );
-        await this.delaySeconds(waitTime);
-        return this.handleArticleSummary(title, content, retries - 1, waitTime);
-      }
-
-      this.logger.error(`AI 요약 최종 실패 (${title}): ${error.message || JSON.stringify(error)}`);
-      return null;
-    }
-  }
-
-  // 실제 AI 요약 로직
-  private async executeAiSummary(title: string, content: string): Promise<AiSummaryResponse> {
     const truncatedContent = content.length > 5000 
     ? content.substring(0, 5000) + '\n...(이하 생략)' 
     : content;
@@ -261,53 +206,74 @@ export class TrendsService {
     }
     `;
 
-    const response = await this.groq.chat.completions.create({
-      model: 'qwen/qwen3.6-27b',
-      messages: [{ role: 'user', content: prompt }],
-      response_format: { type: 'json_object' },
-      temperature: 0.1,
-      max_completion_tokens: 4096,
-      reasoning_effort: 'none',
-    });
+    for (let retry = 0; retry <= maxRetries; retry++) {
+      try {
+        this.logger.log(`AI 분석 중: ${title}`);
+        const response = await this.groq.chat.completions.create({
+          model: 'qwen/qwen3.6-27b',
+          messages: [{ role: 'user', content: prompt }],
+          response_format: { type: 'json_object' },
+          temperature: 0.1,
+          max_completion_tokens: 4096,
+          reasoning_effort: 'none',
+        });
 
-    const rawText = response.choices[0]?.message?.content;
-    if (!rawText) throw new Error('Groq 응답이 비어있습니다.');
+        const rawText = response.choices[0]?.message?.content;
+        if (!rawText) throw new Error('Groq 응답이 비어있습니다.');
 
-    // 요약본 파싱 체크
-    try {
-      const parsed = JSON.parse(rawText);
+        // 요약본 파싱 체크
+        try {
+          const parsed = JSON.parse(rawText);
 
-      // AI가 유용하지 않은 글이라고 판단한 경우
-      if (parsed.is_valuable === false) {
-        return {
-          is_valuable: false,
-          title: '',
-          summary: [],
-          tags: null,
-        };
+          // AI가 유용하지 않은 글이라고 판단한 경우
+          if (parsed.is_valuable === false) {
+            return {
+              is_valuable: false,
+              title: '',
+              summary: [],
+              tags: null,
+            };
+          }
+
+          // 태그 포맷팅 검증
+          let formattedTags: string | null = null;
+          if (Array.isArray(parsed.tags)) {
+            formattedTags = parsed.tags.join(', ');
+          } else if (typeof parsed.tags === 'string') {
+            formattedTags = parsed.tags;
+          }
+
+          // 요약문 배열 포맷팅 검증
+          const formattedSummary = Array.isArray(parsed.summary)
+            ? parsed.summary
+            : [String(parsed.summary || '요약 내용 없음')];
+
+          return {
+            is_valuable: true,
+            title: parsed.title || title,
+            summary: formattedSummary,
+            tags: formattedTags,
+          };
+        } catch (parseError: any) {
+          throw new Error(`JSON 파싱 실패: ${parseError.message}`);
+        }
+      } catch (error: any) {
+        const status = error.status || error.statusCode || error.response?.status;
+        const isNonRetryable4xx = status >= 400 && status < 500 && status !== 429;
+
+        // 더 이상 재시도할 수 없거나 복구 불가능한 에러인 경우
+        if (retry === maxRetries || isNonRetryable4xx) {
+          this.logger.error(`AI 요약 최종 실패 (${title}): ${error.message || JSON.stringify(error)}`);
+          return null;
+        }
+
+        this.logger.warn(
+          `AI 요약 일시적 실패 (${error.message}). ${waitTime}초 후 재시도합니다...`
+        );
+        await this.delaySeconds(waitTime);
       }
-
-      // 태그 포맷팅 검증
-      let formattedTags: string | null = null;
-      if (Array.isArray(parsed.tags)) {
-        formattedTags = parsed.tags.join(', ');
-      } else if (typeof parsed.tags === 'string') {
-        formattedTags = parsed.tags;
-      }
-
-      // 요약문 배열 포맷팅 검증
-      const formattedSummary = Array.isArray(parsed.summary)
-        ? parsed.summary
-        : [String(parsed.summary || '요약 내용 없음')];
-
-      return {
-        is_valuable: true,
-        title: parsed.title || title,
-        summary: formattedSummary,
-        tags: formattedTags,
-      };
-    } catch (parseError: any) {
-      throw new Error(`JSON 파싱 실패: ${parseError.message}`);
     }
+
+    return null;
   }
 }
