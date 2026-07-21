@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { DevToScraper } from './scrapers/devto.scraper';
 import { TechTrend } from 'database/entities/tech-trend.entity';
 import Groq from 'groq-sdk';
@@ -94,7 +94,17 @@ export class TrendsService {
         minComments: this.MIN_COMMENTS,
       });
 
-        let newArticlesInThisPageCount = 0; // 이번 페이지의 신규 글 개수
+      // DB 중복 체크를 위해 해당하는 URL 조회
+      const articleUrls = articles.map((article) => article.url);
+      const existingTrends = await this.techTrendRepository.find({
+        where: { link_url: In(articleUrls) },
+        select: {
+          link_url: true,
+        },
+      });
+      const existingUrlSet = new Set(existingTrends.map((trend) => trend.link_url));
+
+      let newArticlesInThisPageCount = 0; // 이번 페이지의 신규 글 개수
 
         for (const article of articles) {
           // 목표 개수(TARGET_COUNT) 채우면 즉시 중단
@@ -103,12 +113,10 @@ export class TrendsService {
           let isApiCalled = false; // 외부 API를 찔렀는지 여부
 
           try {
+
             // DB 중복 체크
-            const isExist = await this.techTrendRepository.findOne({
-              where: { link_url: article.url },
-            });
-            if (isExist) {
-              this.logger.log(`이미 수집된 링크 스킵: ${article.title}`);
+            if (existingUrlSet.has(article.url)) {
+              this.logger.log(`이미 수집된 링크 스킵, 제목: ${article.title}`);
               continue;
             }
 
@@ -128,12 +136,12 @@ export class TrendsService {
             const aiResult = await this.handleArticleSummary(article.title, sanitizedContent);
 
             if (!aiResult) {
-              this.logger.warn(`AI 요약 실패 스킵: ${article.title}`);
+              this.logger.warn(`AI 요약 실패 스킵, 제목: ${article.title}`);
               continue;
             }
 
             if (!aiResult.is_valuable) {
-              this.logger.warn(`정보 가치가 없는 잡설/회고글 스킵: ${article.title}`);
+              this.logger.warn(`정보 가치가 없는 글 스킵, 제목: ${article.title}`);
               continue;
             }
 
@@ -151,14 +159,14 @@ export class TrendsService {
             processedUrls.push(article.url);
             newArticlesInThisPageCount++;
 
-            this.logger.log(`저장 완료 (${processedUrls.length}/${this.TARGET_COUNT}): ${aiResult.title}`);
+            this.logger.log(`저장 완료, (${processedUrls.length}/${this.TARGET_COUNT}): ${aiResult.title}`);
 
           } catch (error) {
             this.logger.error(`글 처리 중 에러 발생: ${article.title}`, error);
           } finally {
             if (isApiCalled) {
-              this.logger.log(`다음 작업을 위해 5초 대기...`);
-              await this.delaySeconds(5);
+              this.logger.log(`다음 작업을 위해 3초 대기...`);
+              await this.delaySeconds(3);
             }
           }
         }
