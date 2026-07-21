@@ -4,7 +4,15 @@ import { Repository } from 'typeorm';
 import { DevToScraper } from './scrapers/devto.scraper';
 import { TechTrend } from 'database/entities/tech-trend.entity';
 import Groq from 'groq-sdk';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
+
+// AI 응답 타입 정의
+interface AiSummaryResponse {
+  is_valuable: boolean;
+  title: string;
+  summary: string[];
+  tags: string | null;
+}
 
 @Injectable()
 export class TrendsService {
@@ -15,7 +23,7 @@ export class TrendsService {
   // 파이프라인 수집 설정값
   private readonly TARGET_COUNT = 15; // 최종 저장할 개수
   private readonly LIMIT = 30; // 일단 긁어올 본문의 개수
-  private readonly MIN_REACTIONS = 20; // 최소 좋아요 개수
+  private readonly MIN_REACTIONS = 10; // 최소 좋아요 개수
   private readonly MIN_COMMENTS = 1; // 최소 댓글 개수
   private readonly MAX_SKIP_PAGES = 3; // 최대 스킵 페이지
 
@@ -39,8 +47,25 @@ export class TrendsService {
     await this.collectAndProcessTrends();
   }
 
+  // 딜레이 기능
   private delaySeconds(seconds: number) {
     return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+  }
+
+  // 본문 전처리
+  private sanitizeContent(markdown: string): string {
+    if (!markdown) return '';
+
+    return markdown
+      .replace(/!\[.*?\]\(.*?\)/g, '')
+      .replace(/\[(.*?)\]\(.*?\)/g, '$1')
+      .replace(/```[\s\S]*?```/g, '[코드 블록 생략]')
+      .replace(/<[^>]*>?/gm, '')
+      .replace(/\|?\s*:-+:?\s*\|?/g, '')
+      .replace(/^-{3,}$/gm, '')
+      .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
+      .replace(/\n\s*\n+/g, '\n')
+      .trim();
   }
 
   // 외부 소스(DEV.to)에서 인기 글을 가져와 가공 후 DB에 저장
@@ -75,6 +100,8 @@ export class TrendsService {
           // 목표 개수(TARGET_COUNT) 채우면 즉시 중단
           if (processedUrls.length >= this.TARGET_COUNT) break;
 
+          let isApiCalled = false; // 외부 API를 찔렀는지 여부
+
           try {
             // DB 중복 체크
             const isExist = await this.techTrendRepository.findOne({
@@ -85,6 +112,8 @@ export class TrendsService {
               continue;
             }
 
+            isApiCalled = true;
+
             // 본문 수집
             const content = await this.devToScraper.getArticleContent(article.id);
             if (!content || content === '') {
@@ -92,11 +121,19 @@ export class TrendsService {
               continue;
             }
 
+            // 본문 전처리
+            const sanitizedContent = this.sanitizeContent(content);
+
             // AI 요약
-            this.logger.log(`AI 분석 중: ${article.title}`);
-            const aiResult = await this.handleArticleSummary(article.title, content);
+            const aiResult = await this.handleArticleSummary(article.title, sanitizedContent);
+
             if (!aiResult) {
-              this.logger.error(`AI 요약 실패로 패스: ${article.title}`);
+              this.logger.warn(`AI 요약 실패 스킵: ${article.title}`);
+              continue;
+            }
+
+            if (!aiResult.is_valuable) {
+              this.logger.warn(`정보 가치가 없는 잡설/회고글 스킵: ${article.title}`);
               continue;
             }
 
@@ -115,12 +152,14 @@ export class TrendsService {
             newArticlesInThisPageCount++;
 
             this.logger.log(`저장 완료 (${processedUrls.length}/${this.TARGET_COUNT}): ${aiResult.title}`);
-            this.logger.log(`다음 작업을 위해 5초 대기...`);
-            await this.delaySeconds(5);
 
           } catch (error) {
             this.logger.error(`글 처리 중 에러 발생: ${article.title}`, error);
-            await this.delaySeconds(5);
+          } finally {
+            if (isApiCalled) {
+              this.logger.log(`다음 작업을 위해 5초 대기...`);
+              await this.delaySeconds(5);
+            }
           }
         }
 
@@ -147,8 +186,9 @@ export class TrendsService {
     content: string, 
     retries = 2, 
     waitTime = 30, 
-  ): Promise<{ title: string, summary: string[]; tags: string | null } | null> {
+  ): Promise<AiSummaryResponse | null> {
     try {
+      this.logger.log(`AI 분석 중: ${title}`);
       return await this.executeAiSummary(title, content);
     } catch (error: any) {
       
@@ -168,7 +208,7 @@ export class TrendsService {
   }
 
   // 실제 AI 요약 로직
-  private async executeAiSummary(title: string, content: string): Promise<{ title: string, summary: string[]; tags: string | null }> {
+  private async executeAiSummary(title: string, content: string): Promise<AiSummaryResponse> {
     const truncatedContent = content.length > 5000 
     ? content.substring(0, 5000) + '\n...(이하 생략)' 
     : content;
@@ -181,27 +221,35 @@ export class TrendsService {
     - 영문 제목: ${title}
     - 본문: ${truncatedContent}
 
-    [작성 가이드라인]
-    1. [title]: 영문 제목을 백엔드 개발자가 쉽게 알아볼 수 있는 기술 아티클 제목으로 가공하세요.
+    [유효성 판별 기준 (is_valuable)]
+    아래 기준 중 하나라도 해당되면 "is_valuable": false 로 지정하세요.
+    - 단순 개발자 회고, 수필, 커리어 고민, 소소한 일상 이야기(잡설)
+    - 기술적 깊이나 유용한 정보가 없는 단순 광고, 프로모션글
+    - 코딩/개발/IT 아키텍처/DevOps/CS 지식과 관련 없는 글
+    * 실제 개발 기술, 튜토리얼, 아키텍처 설계, 신기술 소식, 성능 최적화 등 "개발자에게 유용한 정보"일 때만 "is_valuable": true 로 지정합니다.
+
+    [작성 가이드라인 (is_valuable이 true일 때만 유효)]
+    1. title: 영문 제목을 한국인 백엔드 개발자가 쉽게 알아볼 수 있는 기술 아티클 제목으로 가공합니다.
     - 소설이나 수필 같은 어색한 문장체(~했습니다, ~마주했다)는 자제하고, 핵심 기술/주제가 명확히 드러나는 직관적인 제목으로 만드세요.
-    - 권장 형식: "[주제/기술스택] 핵심 문제 해결법 또는 가이드" 형태로 작성
-    - 좋은 예시: 
-      * "OpenTelemetry와 SigNoz를 활용한 AI 분석기 관측성 확보"
-      * "사이버 보안 전략: AI 미끼를 활용한 네트워크 불법 감시자 포착"
-      * "OpenAI 빌드 위크 및 $12K 펠로우십 프로그램 소개"
-    2. summary: 본문의 핵심 내용을 친근한 존댓말 구어체(~해요, ~했습니다)로 구성된 한국어 표준어 3문장 리스트로 요약합니다.
-    3. tags: 글과 관련된 주요 기술 스택을 쉼표로 구분한 문자열로 추출합니다. (예: "NestJS, Redis, TypeORM") 관련 스택이 없다면 null로 지정합니다.
-    4. 언어 규칙: 모든 문자열은 한글 표준어와 영문 기술 용어(NestJS, Docker 등)로만 작성하며, CJK 한자(漢字) 및 어색한 직역 표현은 완벽히 exclusion 처리하여 순화된 한국어로 작성합니다.
+    - 예시: "OpenTelemetry와 SigNoz를 활용한 AI 분석기 관측성 확보"
+    2. summary: 핵심 내용을 친근한 존댓말(~해요, ~했습니다) 3문장 리스트로 요약
+    3. tags: 주요 기술 스택 쉼표 구분 문자열 (예: "NestJS, Redis")
 
     [응답 포맷 예시 (JSON)]
+    - 유용한 기술 글인 경우:
     {
-      "title": "자연스러운 한국어 제목",
-      "summary": [
-        "첫 번째 핵심 요약 문장입니다.",
-        "두 번째 핵심 요약 문장입니다.",
-        "세 번째 핵심 요약 문장입니다."
-      ],
-      "tags": "Node.js, Docker"
+      "is_valuable": true,
+      "title": "OpenTelemetry와 SigNoz를 활용한 관측성 확보",
+      "summary": ["첫 번째 문장.", "두 번째 문장.", "세 번째 문장."],
+      "tags": "OpenTelemetry, Node.js"
+    }
+
+    - 유용하지 않거나 잡설인 경우:
+    {
+      "is_valuable": false,
+      "title": "",
+      "summary": [],
+      "tags": null
     }
     `;
 
@@ -209,7 +257,7 @@ export class TrendsService {
       model: 'qwen/qwen3.6-27b',
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' },
-      temperature: 0.2,
+      temperature: 0.1,
       max_completion_tokens: 4096,
       reasoning_effort: 'none',
     });
@@ -221,6 +269,17 @@ export class TrendsService {
     try {
       const parsed = JSON.parse(rawText);
 
+      // AI가 유용하지 않은 글이라고 판단한 경우
+      if (parsed.is_valuable === false) {
+        return {
+          is_valuable: false,
+          title: '',
+          summary: [],
+          tags: null,
+        };
+      }
+
+      // 태그 포맷팅 검증
       let formattedTags: string | null = null;
       if (Array.isArray(parsed.tags)) {
         formattedTags = parsed.tags.join(', ');
@@ -228,11 +287,13 @@ export class TrendsService {
         formattedTags = parsed.tags;
       }
 
+      // 요약문 배열 포맷팅 검증
       const formattedSummary = Array.isArray(parsed.summary)
         ? parsed.summary
         : [String(parsed.summary || '요약 내용 없음')];
 
       return {
+        is_valuable: true,
         title: parsed.title || title,
         summary: formattedSummary,
         tags: formattedTags,

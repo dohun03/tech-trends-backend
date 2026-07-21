@@ -25,7 +25,7 @@ export class DevToScraper {
     const {
       page = 1,
       limit = 30,
-      minReactions = 20,
+      minReactions = 10,
       minComments = 1,
     } = options;
 
