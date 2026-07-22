@@ -10,7 +10,8 @@ import { Cron } from '@nestjs/schedule';
 interface AiSummaryResponse {
   is_valuable: boolean;
   title: string;
-  summary: string[];
+  short_summary: string[];
+  long_summary: string;
   tags: string | null;
 }
 
@@ -88,16 +89,14 @@ export class TrendsService {
       }
 
       // DB 중복 글 필터링
-      const articleUrls = articles.map((article) => article.url);
+      const sourceIds = articles.map((article) => String(article.id));
       const existingTrends = await this.techTrendRepository.find({
-        where: { link_url: In(articleUrls) },
-        select: {
-          link_url: true,
-        },
+        where: { source_id: In(sourceIds), source: 'dev.to' },
+        select: { source_id: true },
       });
-      const existingUrlSet = new Set(existingTrends.map((trend) => trend.link_url));
+      const existingSourceIdSet = new Set(existingTrends.map((trend) => trend.source_id));
       const filteredArticles = articles.filter(
-        (article) => !existingUrlSet.has(article.url)
+        (article) => !existingSourceIdSet.has(String(article.id)),
       );
 
       this.logger.log(`====== 글 ${filteredArticles.length}개 수집 시작, 최대: ${this.TARGET_COUNT}개 ======`);
@@ -131,11 +130,13 @@ export class TrendsService {
 
           // DB 저장
           const trendEntity = this.techTrendRepository.create({
-            title: aiResult.title,
-            link_url: article.url,
-            summary: aiResult.summary,
-            technical_tags: aiResult.tags,
             source: 'dev.to',
+            source_id: String(article.id),
+            title: aiResult.title,
+            short_summary: aiResult.short_summary,
+            long_summary: aiResult.long_summary,
+            link_url: article.url,
+            technical_tags: aiResult.tags,
             created_at: new Date(article.created_at),
           });
           await this.techTrendRepository.save(trendEntity);
@@ -185,15 +186,21 @@ export class TrendsService {
     1. title: 영문 제목을 한국인 백엔드 개발자가 쉽게 알아볼 수 있는 기술 아티클 제목으로 가공합니다.
     - 소설이나 수필 같은 어색한 문장체(~했습니다, ~마주했다)는 자제하고, 핵심 기술/주제가 명확히 드러나는 직관적인 제목으로 만드세요.
     - 예시: "OpenTelemetry와 SigNoz를 활용한 AI 분석기 관측성 확보"
-    2. summary: 핵심 내용을 친근한 존댓말(~해요, ~했습니다) 3문장 리스트로 요약
-    3. tags: 주요 기술 스택 쉼표 구분 문자열 (예: "NestJS, Redis")
+    2. short_summary: 핵심 내용을 친근한 존댓말(~해요, ~했습니다) 3문장 리스트로 요약
+    3. long_summary: 
+    - 최소 400자~800자 이상으로 원문의 맥락과 주요 내용을 상세하게 작성하세요.
+    - 단순 개요만 적지 말고, 원문에 언급된 구체적인 개념 정의, 기술 스택, 실습 시나리오, 주요 명령어나 제약 조건 등 핵심 디테일을 생략 없이 모두 포함해야 합니다.
+    - 읽기 쉽게 문단 구분이나 불릿 포인트(- )를 활용해 구조화해 주세요.
+    (마크다운 형식)
+    4. tags: 주요 기술 스택 쉼표 구분 문자열 (예: "NestJS, Redis")
 
     [응답 포맷 예시 (JSON)]
     - 유용한 기술 글인 경우:
     {
       "is_valuable": true,
       "title": "OpenTelemetry와 SigNoz를 활용한 관측성 확보",
-      "summary": ["첫 번째 문장.", "두 번째 문장.", "세 번째 문장."],
+      "short_summary": ["첫 번째 문장.", "두 번째 문장.", "세 번째 문장."],
+      "long_summary": "여기에 상세 요약 내용을 작성...",
       "tags": "OpenTelemetry, Node.js"
     }
 
@@ -201,7 +208,8 @@ export class TrendsService {
     {
       "is_valuable": false,
       "title": "",
-      "summary": [],
+      "short_summary": [],
+      "long_summary": "",
       "tags": null
     }
     `;
@@ -230,7 +238,8 @@ export class TrendsService {
             return {
               is_valuable: false,
               title: '',
-              summary: [],
+              short_summary: [],
+              long_summary: '',
               tags: null,
             };
           }
@@ -244,16 +253,18 @@ export class TrendsService {
           }
 
           // 요약문 배열 포맷팅 검증
-          const formattedSummary = Array.isArray(parsed.summary)
-            ? parsed.summary
-            : [String(parsed.summary || '요약 내용 없음')];
+          const formattedShortSummary = Array.isArray(parsed.short_summary)
+            ? parsed.short_summary
+            : [String(parsed.short_summary || '요약 내용 없음')];
 
           return {
             is_valuable: true,
             title: parsed.title || title,
-            summary: formattedSummary,
+            short_summary: formattedShortSummary,
+            long_summary: String(parsed.long_summary || ''),
             tags: formattedTags,
           };
+
         } catch (parseError: any) {
           throw new Error(`JSON 파싱 실패: ${parseError.message}`);
         }
