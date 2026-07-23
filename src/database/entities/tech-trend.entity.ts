@@ -16,7 +16,7 @@ export class TechTrend {
   @Column({ type: 'varchar', length: 255 })
   title!: string;
 
-  @Column({ type: 'json' })
+  @Column({ type: 'jsonb' })
   short_summary!: string[];
 
   @Column({ type: 'text', nullable: true })
@@ -28,6 +28,9 @@ export class TechTrend {
   @Column({ type: 'varchar', length: 255, nullable: true })
   @Index('IDX_technical_tags') 
   technical_tags!: string | null;
+
+  @Column('vector', { length: 1536, nullable: true })
+  embedding!: number[] | null;
 
   // 원본 글 작성일자 (정렬용)
   @Column({ type: 'date' })

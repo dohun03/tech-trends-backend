@@ -44,8 +44,8 @@ export class ApiService {
     // 오늘 수집한 데이터만 조회
     if (isNew) {
       queryBuilder
-        .andWhere('trend.mined_at >= CURDATE()')
-        .andWhere('trend.mined_at < CURDATE() + INTERVAL 1 DAY');
+        .andWhere('trend.mined_at >= CURRENT_DATE')
+        .andWhere("trend.mined_at < CURRENT_DATE + INTERVAL '1 day'");
     }
 
     // 정렬 및 페이지네이션 설계
