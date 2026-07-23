@@ -6,9 +6,11 @@ import { TechTrend } from 'database/entities/tech-trend.entity';
 import Groq from 'groq-sdk';
 import { Cron } from '@nestjs/schedule';
 
-// AI 응답 타입 정의
-interface AiSummaryResponse {
-  is_valuable: boolean;
+interface BatchEvaluationResult {
+  valuable_ids: number[];
+}
+
+interface FinalSummaryResult {
   title: string;
   short_summary: string[];
   long_summary: string;
@@ -21,41 +23,253 @@ export class TrendsService {
   private groq: Groq;
   private isProcessing = false;
 
-  // 파이프라인 수집 설정값
-  private readonly TARGET_COUNT = 10; // 최종 저장할 개수
-  private readonly MIN_REACTIONS = 10; // 최소 좋아요 개수
-  private readonly MIN_COMMENTS = 1; // 최소 댓글 개수
+  private readonly TARGET_COUNT = 10;
+  private readonly BATCH_SIZE = 10;
+  private readonly MIN_REACTIONS = 10;
+  private readonly MIN_COMMENTS = 1;
 
   constructor(
     private readonly devToScraper: DevToScraper,
     @InjectRepository(TechTrend)
     private readonly techTrendRepository: Repository<TechTrend>,
   ) {
-    this.groq = new Groq({
-      apiKey: process.env.GROQ_API_KEY,
-    });
+    this.groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
   }
 
-  // 특정 시간에 자동 실행(분 시 일 월 요일)
-  @Cron('0 1 * * *', {
-    name: 'devto-trends-collector',
-    timeZone: 'Asia/Seoul',
-  })
+  @Cron('0 1 * * *', { name: 'devto-trends-collector', timeZone: 'Asia/Seoul' })
   async handleDailyTrendsCron() {
     this.logger.log('Cron : 수집 배치 작업을 시작합니다.');
     await this.collectAndProcessTrends();
   }
 
-  // 딜레이 기능
-  private delaySeconds(seconds: number) {
-    return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+  // 메인 파이프라인
+  async collectAndProcessTrends() {
+    if (this.isProcessing) {
+      this.logger.warn('이미 수집 파이프라인이 실행 중입니다.');
+      return;
+    }
+
+    this.isProcessing = true;
+    let savedCount = 0;
+
+    try {
+      // 100개 글 목록 수집
+      const articles = await this.devToScraper.getTrendingArticles({
+        minReactions: this.MIN_REACTIONS,
+        minComments: this.MIN_COMMENTS,
+      });
+
+      if (articles.length === 0) {
+        this.logger.warn('조건을 만족하는 글이 없습니다.');
+        return;
+      }
+
+      // DB 중복 일괄 필터링
+      const sourceIds = articles.map((a) => String(a.id));
+      const existingTrends = await this.techTrendRepository.find({
+        where: { source_id: In(sourceIds), source: 'dev.to' },
+        select: { source_id: true },
+      });
+      const existingSet = new Set(existingTrends.map((t) => t.source_id));
+      const filteredArticles = articles.filter((a) => !existingSet.has(String(a.id)));
+
+      // 10개 단위 배치 분할 (2중 배열)
+      const batches = this.chunkArray(filteredArticles, this.BATCH_SIZE);
+
+      // 배치 단위 처리 루프 (목표 개수 채울 때까지)
+      for (const batch of batches) {
+        if (savedCount >= this.TARGET_COUNT) {
+          this.logger.log(`목표 수량(${this.TARGET_COUNT}개) 달성으로 파이프라인을 완료합니다.`);
+          break;
+        }
+
+        const batchIds = batch.map((a) => a.id);
+        const contentMap = await this.fetchBatchContents(batchIds);
+        const batchPayload = batch.map((article) => ({
+          id: article.id,
+          title: article.title,
+          snippet: this.sanitizeAndFilter(contentMap.get(article.id) || '', 800),
+        }));
+
+        // AI 평가 (가치 있는 글 ID 선정)
+        const valuableIds = await this.filterBatchWithAi(batchPayload);
+        this.logger.log(`배치 ${batch.length}개 중 AI가 가치 있다고 평가한 글: ${valuableIds.length}개`);
+
+        // 10개 단위 배치 루프 실행
+        for (const article of batch) {
+          // 10개 이하 / 필터링된 것만 실행
+          if (savedCount >= this.TARGET_COUNT) break;
+          if (!valuableIds.includes(article.id)) continue;
+
+          // ID별로 원문 추출
+          const content = contentMap.get(article.id);
+          if (!content) continue;
+
+          // 원본 글 5000자로 자름
+          const cleanContent = this.sanitizeAndFilter(content, 5000);
+
+          // AI 요약
+          this.logger.log(`AI 요약 시작..`);
+          const summary = await this.contentSummaryWithAi(article.title, cleanContent);
+          if (!summary) continue;
+
+          // DB 저장
+          const entity = this.techTrendRepository.create({
+            source: 'dev.to',
+            source_id: String(article.id),
+            title: summary.title,
+            short_summary: summary.short_summary,
+            long_summary: summary.long_summary,
+            link_url: article.url,
+            technical_tags: summary.tags,
+            created_at: new Date(article.created_at),
+          });
+          await this.techTrendRepository.save(entity);
+
+          savedCount++;
+
+          this.logger.log(`저장 완료 [${savedCount}/${this.TARGET_COUNT}]: ${summary.title}`);
+          this.logger.log(`2초 뒤 루프 재실행`);
+
+          await this.delaySeconds(2);
+        }
+      }
+    } catch (error) {
+      this.logger.error('수집 파이프라인 처리 중 오류 발생', error);
+    } finally {
+      this.isProcessing = false;
+      this.logger.log(`====== 수집 작업 종료 (총 저장: ${savedCount}개) ======`);
+    }
   }
 
-  // 본문 전처리
-  private sanitizeContent(markdown: string): string {
+  // 글 여러개에 대해 병렬로 본문 스크래핑
+  private async fetchBatchContents(articleIds: number[]): Promise<Map<number, string>> {
+    this.logger.log(`${articleIds.length}개 글 본문 병렬 수집 시작...`);
+    const contentMap = new Map<number, string>();
+
+    const promises = articleIds.map(async (id) => {
+      const content = await this.devToScraper.getArticleContent(id);
+      return { id, content };
+    });
+
+    const results = await Promise.all(promises);
+    results.forEach(({ id, content }) => {
+      contentMap.set(id, content);
+    });
+
+    return contentMap;
+  }
+
+  // AI 평가(필터링)
+  private async filterBatchWithAi(
+    items: Array<{ id: number; title: string; snippet: string }>,
+  ): Promise<number[]> {
+    const prompt = `
+    당신은 백엔드 개발자 시각의 IT 트렌드 큐레이터입니다.
+    아래 10개 아티클 목록(제목 및 800자 요약)을 읽고, 백엔드/DevOps/CS/개발기술 측면에서 실무에 도움이 되는 가치 있는 글의 ID만 선택하세요.
+
+    [제외 대상]
+    - 수필, 개인 회고, 개발 커리어 고민, 소소한 일상
+    - 단순 광고/홍보성 글
+
+    [평가 대상]
+    ${JSON.stringify(items, null, 2)}
+
+    [응답 포맷 (JSON)]
+    {
+      "valuable_ids": [12345, 67890]
+    }
+    `;
+
+    try {
+      const response = await this.groq.chat.completions.create({
+        model: 'qwen/qwen3.6-27b',
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' },
+        temperature: 0.1,
+        max_completion_tokens: 4096,
+        reasoning_effort: 'none',
+      });
+
+      const raw = response.choices[0]?.message?.content;
+      if (!raw) return [];
+
+      const parsed: BatchEvaluationResult = JSON.parse(raw);
+      return parsed.valuable_ids || [];
+    } catch (error: any) {
+      this.logger.error(`배치 AI 평가 실패: ${error.message}`);
+      return [];
+    }
+  }
+
+  // AI 요약
+  private async contentSummaryWithAi(
+    title: string,
+    content: string,
+  ): Promise<FinalSummaryResult | null> {
+    const prompt = `
+    당신은 IT 트렌드 전문 에디터입니다.
+    제공된 개발 블로그 글을 한국인 백엔드 개발자 시각으로 요약하세요.
+
+    [글 정보]
+    - 영문 제목: ${title}
+    - 본문 내용: ${content}
+
+    [작성 가이드]
+    1. title: 기술 직관적인 한국어 제목
+    2. short_summary: 핵심 내용 친근한 존댓말(~해요) 3문장 배열
+    3. long_summary: 원문 내용에 따라서 300자~1000자 이상의 상세 마크다운 요약 (구체적인 개념, 기술 스택, 실습, 주요 제약 조건 포함)
+    4. tags: 주요 기술 스택 쉼표 구분 문자열 (예: "NestJS, Redis")
+
+    [응답 포맷 (JSON)]
+    {
+      "title": "가공된 한국어 제목",
+      "short_summary": ["문장 1", "문장 2", "문장 3"],
+      "long_summary": "마크다운 본문 요약...",
+      "tags": "NestJS, TypeORM"
+    }
+    `;
+
+    try {
+      const response = await this.groq.chat.completions.create({
+        model: 'qwen/qwen3.6-27b',
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' },
+        temperature: 0.2,
+        max_completion_tokens: 4096,
+        reasoning_effort: 'none',
+      });
+
+      const raw = response.choices[0]?.message?.content;
+      if (!raw) return null;
+
+      const parsed = JSON.parse(raw);
+      return {
+        title: parsed.title || title,
+        short_summary: Array.isArray(parsed.short_summary) ? parsed.short_summary : [parsed.short_summary],
+        long_summary: parsed.long_summary || '',
+        tags: Array.isArray(parsed.tags) ? parsed.tags.join(', ') : parsed.tags || null,
+      };
+    } catch (error: any) {
+      this.logger.error(`단일 AI 요약 생성 실패 (${title}): ${error.message}`);
+      return null;
+    }
+  }
+
+  // 유틸리티 메서드 모음
+
+  private chunkArray<T>(array: T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < array.length; i += size) {
+      chunks.push(array.slice(i, i + size));
+    }
+    return chunks;
+  }
+
+  private sanitizeAndFilter(markdown: string, limit = 800): string {
     if (!markdown) return '';
 
-    return markdown
+    const cleaned = markdown
       .replace(/!\[.*?\]\(.*?\)/g, '')
       .replace(/\[(.*?)\]\(.*?\)/g, '$1')
       .replace(/```[\s\S]*?```/g, '[코드 블록 생략]')
@@ -65,226 +279,11 @@ export class TrendsService {
       .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
       .replace(/\n\s*\n+/g, '\n')
       .trim();
+
+    return cleaned.length > limit ? cleaned.substring(0, limit) + '...' : cleaned;
   }
 
-  // 외부 소스(DEV.to)에서 인기 글을 가져와 가공 후 DB에 저장
-  async collectAndProcessTrends() {
-    if (this.isProcessing) {
-      this.logger.warn('이미 수집 파이프라인이 실행 중입니다. 중복 요청을 무시합니다.');
-      return;
-    }
-
-    let savedCount = 0;
-    this.isProcessing = true;
-
-    try {
-      // 스크래퍼 호출
-      const articles = await this.devToScraper.getTrendingArticles({
-        minReactions: this.MIN_REACTIONS,
-        minComments: this.MIN_COMMENTS,
-      });
-      if (articles.length === 0) {
-        this.logger.warn('불러온 글이 없습니다.');
-        return;
-      }
-
-      // DB 중복 글 필터링
-      const sourceIds = articles.map((article) => String(article.id));
-      const existingTrends = await this.techTrendRepository.find({
-        where: { source_id: In(sourceIds), source: 'dev.to' },
-        select: { source_id: true },
-      });
-      const existingSourceIdSet = new Set(existingTrends.map((trend) => trend.source_id));
-      const filteredArticles = articles.filter(
-        (article) => !existingSourceIdSet.has(String(article.id)),
-      );
-
-      this.logger.log(`====== 글 ${filteredArticles.length}개 수집 시작, 최대: ${this.TARGET_COUNT}개 ======`);
-      // 필터링된 글 순회
-      for (const article of filteredArticles) {
-        if (savedCount >= this.TARGET_COUNT) break;
-
-        try {
-          // 본문 수집
-          const content = await this.devToScraper.getArticleContent(article.id);
-          if (!content || content === '') {
-            this.logger.warn(`ID: ${article.id} 글은 본문이 없어 요약을 건너뜁니다.`);
-            continue;
-          }
-
-          // 본문 전처리
-          const sanitizedContent = this.sanitizeContent(content);
-
-          // AI 요약
-          const aiResult = await this.handleArticleAiSummary(article.title, sanitizedContent);
-
-          if (!aiResult) {
-            this.logger.warn(`AI 요약 실패로 인한 중단`);
-            break;
-          }
-
-          if (!aiResult.is_valuable) {
-            this.logger.warn(`정보 가치가 없는 글 스킵, 제목: ${article.title}`);
-            continue;
-          }
-
-          // DB 저장
-          const trendEntity = this.techTrendRepository.create({
-            source: 'dev.to',
-            source_id: String(article.id),
-            title: aiResult.title,
-            short_summary: aiResult.short_summary,
-            long_summary: aiResult.long_summary,
-            link_url: article.url,
-            technical_tags: aiResult.tags,
-            created_at: new Date(article.created_at),
-          });
-          await this.techTrendRepository.save(trendEntity);
-
-          savedCount++;
-
-          this.logger.log(`저장 완료, (${savedCount}/${this.TARGET_COUNT}): ${aiResult.title}`);
-
-        } catch (error) {
-          this.logger.error(`글 처리 중 에러 발생: ${article.title}`, error);
-        } finally {
-          this.logger.log(`다음 작업을 위해 3초 대기...`);
-          await this.delaySeconds(3);
-        }
-      }
-    } finally {
-      this.isProcessing = false;
-      this.logger.log(`====== 글 수집 완료, 총: (${savedCount}개) ======`);
-    }
-  }
-
-  // AI 요약 로직
-  private async handleArticleAiSummary(title: string, content: string): Promise<AiSummaryResponse | null> {
-    const maxRetries = 2;
-    const waitTime = 30;
-
-    const truncatedContent = content.length > 5000 
-    ? content.substring(0, 5000) + '\n...(이하 생략)' 
-    : content;
-
-    const prompt = `
-    당신은 해외 기술 블로그를 한국인 백엔드 개발자 시각에 맞게 요약하는 IT 트렌드 전문 에디터입니다.
-    제공된 개발 블로그의 영문 제목과 본문을 분석하여 지정된 JSON 포맷으로 변환해 주세요.
-
-    [글 정보]
-    - 영문 제목: ${title}
-    - 본문: ${truncatedContent}
-
-    [유효성 판별 기준 (is_valuable)]
-    아래 기준 중 하나라도 해당되면 "is_valuable": false 로 지정하세요.
-    - 단순 개발자 회고, 수필, 커리어 고민, 소소한 일상 이야기(잡설)
-    - 기술적 깊이나 유용한 정보가 없는 단순 광고, 프로모션글
-    - 코딩/개발/IT 아키텍처/DevOps/CS 지식과 관련 없는 글
-    * 실제 개발 기술, 튜토리얼, 아키텍처 설계, 신기술 소식, 성능 최적화 등 "개발자에게 유용한 정보"일 때만 "is_valuable": true 로 지정합니다.
-
-    [작성 가이드라인 (is_valuable이 true일 때만 유효)]
-    1. title: 영문 제목을 한국인 백엔드 개발자가 쉽게 알아볼 수 있는 기술 아티클 제목으로 가공합니다.
-    - 소설이나 수필 같은 어색한 문장체(~했습니다, ~마주했다)는 자제하고, 핵심 기술/주제가 명확히 드러나는 직관적인 제목으로 만드세요.
-    - 예시: "OpenTelemetry와 SigNoz를 활용한 AI 분석기 관측성 확보"
-    2. short_summary: 핵심 내용을 친근한 존댓말(~해요, ~했습니다) 3문장 리스트로 요약
-    3. long_summary: 
-    - 최소 400자~800자 이상으로 원문의 맥락과 주요 내용을 상세하게 작성하세요.
-    - 단순 개요만 적지 말고, 원문에 언급된 구체적인 개념 정의, 기술 스택, 실습 시나리오, 주요 명령어나 제약 조건 등 핵심 디테일을 생략 없이 모두 포함해야 합니다.
-    - 읽기 쉽게 문단 구분이나 불릿 포인트(- )를 활용해 구조화해 주세요.
-    (마크다운 형식)
-    4. tags: 주요 기술 스택 쉼표 구분 문자열 (예: "NestJS, Redis")
-
-    [응답 포맷 예시 (JSON)]
-    - 유용한 기술 글인 경우:
-    {
-      "is_valuable": true,
-      "title": "OpenTelemetry와 SigNoz를 활용한 관측성 확보",
-      "short_summary": ["첫 번째 문장.", "두 번째 문장.", "세 번째 문장."],
-      "long_summary": "여기에 상세 요약 내용을 작성...",
-      "tags": "OpenTelemetry, Node.js"
-    }
-
-    - 유용하지 않거나 잡설인 경우:
-    {
-      "is_valuable": false,
-      "title": "",
-      "short_summary": [],
-      "long_summary": "",
-      "tags": null
-    }
-    `;
-
-    for (let retry = 0; retry <= maxRetries; retry++) {
-      try {
-        this.logger.log(`AI 분석 중: ${title}`);
-        const response = await this.groq.chat.completions.create({
-          model: 'qwen/qwen3.6-27b',
-          messages: [{ role: 'user', content: prompt }],
-          response_format: { type: 'json_object' },
-          temperature: 0.1,
-          max_completion_tokens: 4096,
-          reasoning_effort: 'none',
-        });
-
-        const rawText = response.choices[0]?.message?.content;
-        if (!rawText) throw new Error('Groq 응답이 비어있습니다.');
-
-        // 요약본 파싱 체크
-        try {
-          const parsed = JSON.parse(rawText);
-
-          // AI가 유용하지 않은 글이라고 판단한 경우
-          if (parsed.is_valuable === false) {
-            return {
-              is_valuable: false,
-              title: '',
-              short_summary: [],
-              long_summary: '',
-              tags: null,
-            };
-          }
-
-          // 태그 포맷팅 검증
-          let formattedTags: string | null = null;
-          if (Array.isArray(parsed.tags)) {
-            formattedTags = parsed.tags.join(', ');
-          } else if (typeof parsed.tags === 'string') {
-            formattedTags = parsed.tags;
-          }
-
-          // 요약문 배열 포맷팅 검증
-          const formattedShortSummary = Array.isArray(parsed.short_summary)
-            ? parsed.short_summary
-            : [String(parsed.short_summary || '요약 내용 없음')];
-
-          return {
-            is_valuable: true,
-            title: parsed.title || title,
-            short_summary: formattedShortSummary,
-            long_summary: String(parsed.long_summary || ''),
-            tags: formattedTags,
-          };
-
-        } catch (parseError: any) {
-          throw new Error(`JSON 파싱 실패: ${parseError.message}`);
-        }
-      } catch (error: any) {
-        const status = error.status || error.statusCode || error.response?.status;
-        const isNonRetryable4xx = status >= 400 && status < 500 && status !== 429;
-
-        // 더 이상 재시도할 수 없거나 복구 불가능한 에러인 경우
-        if (retry === maxRetries || isNonRetryable4xx) {
-          this.logger.error(`AI 요약 최종 실패 (${title}): ${error.message || JSON.stringify(error)}`);
-          return null;
-        }
-
-        this.logger.warn(
-          `AI 요약 일시적 실패 (${error.message}). ${waitTime}초 후 재시도합니다...`
-        );
-        await this.delaySeconds(waitTime);
-      }
-    }
-
-    return null;
+  private delaySeconds(seconds: number) {
+    return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
   }
 }
