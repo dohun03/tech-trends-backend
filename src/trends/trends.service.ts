@@ -36,12 +36,13 @@ export class TrendsService {
   // 메인 파이프라인
   async collectAndProcessTrends() {
     if (this.isProcessing) {
-      this.logger.warn('이미 수집 파이프라인이 실행 중입니다.');
+      this.logger.warn('[Pipeline] 이미 데이터 수집 파이프라인이 실행 중입니다. 중복 실행을 스킵합니다.');
       return;
     }
 
     this.isProcessing = true;
     let savedCount = 0;
+    this.logger.log(`[Pipeline] 트렌드 수집 파이프라인 시작 | targetCount=${this.TARGET_COUNT}`);
 
     try {
       // 100개 글 목록 수집
@@ -49,9 +50,8 @@ export class TrendsService {
         minReactions: this.MIN_REACTIONS,
         minComments: this.MIN_COMMENTS,
       });
-
       if (articles.length === 0) {
-        this.logger.warn('조건을 만족하는 글이 없습니다.');
+        this.logger.warn('[Pipeline] 조건을 만족하는 귿이 없습니다. | action=terminate');
         return;
       }
 
@@ -63,6 +63,8 @@ export class TrendsService {
       });
       const existingSet = new Set(existingTrends.map((t) => t.source_id));
       const filteredArticles = articles.filter((a) => !existingSet.has(String(a.id)));
+
+      this.logger.log(`[Pipeline] DB 중복 검증 완료 | raw=${articles.length}, new=${filteredArticles.length}`);
 
       // 10개 단위 배치 분할
       const batches = chunkArray(filteredArticles, this.BATCH_SIZE);
@@ -77,7 +79,7 @@ export class TrendsService {
       // 배치 단위 처리 루프 (목표 개수 채울 때까지)
       for (const batch of batches) {
         if (savedCount >= this.TARGET_COUNT) {
-          this.logger.log(`목표 수량(${this.TARGET_COUNT}개) 달성으로 파이프라인을 완료합니다.`);
+          this.logger.log(`[Pipeline] 목표 수량 달성 조기 종료 | target=${this.TARGET_COUNT}, current=${savedCount}`);
           break;
         }
 
@@ -85,7 +87,7 @@ export class TrendsService {
         const articleContentMap = await this.fetchBatchContents(batchIds);
         const validBatch = batch.filter((article) => articleContentMap.has(article.id));
         if (validBatch.length === 0) {
-          this.logger.warn('본문을 불러오지 못했습니다.');
+          this.logger.warn(`[Pipeline] 배치 내 유효 본문 없음 스킵`);
           continue;
         }
 
@@ -97,7 +99,7 @@ export class TrendsService {
 
         // AI 평가 (가치 있는 글 ID 선정)
         const valuableIds = await this.aiService.filterBatchWithAi(batchPayload);
-        this.logger.log(`배치 ${batch.length}개 중 AI가 가치 있다고 평가한 글: ${valuableIds.length}개`);
+        this.logger.log(`[Pipeline] AI 가치 평가 완료 | valid=${validBatch.length}, selected=${valuableIds.length}`);
 
         // 10개 단위 배치 루프 실행
         for (const article of batch) {
@@ -123,19 +125,18 @@ export class TrendsService {
           });
 
           savedCount++;
-          this.logger.log(`요약 완료 [${savedCount}/${this.TARGET_COUNT}]: ${summary.title}`);
+          this.logger.log(`[Pipeline] 아티클 요약 완료 | progress=${savedCount}/${this.TARGET_COUNT}, articleId=${article.id}`);
 
           await delaySeconds(3);
         }
       }
 
       if (collectedItems.length === 0) {
-        this.logger.warn('수집 및 요약된 항목이 없습니다.');
+        this.logger.warn('[Pipeline] 수집 및 요약된 항목 없음 | action=terminate');
         return;
       }
 
-      // 모인 요약 텍스트들에 대해 Gemini 임베딩 API 일괄 호출
-      this.logger.log(`총 ${collectedItems.length}개 항목에 대한 임베딩 생성 시작...`);
+      this.logger.log(`[Pipeline] 벡터 임베딩 생성 시작 | count=${collectedItems.length}`);
       const embeddingTexts = collectedItems.map((item) => item.embeddingText);
       const embeddingVectors = await this.aiService.vectorEmbeddingWithAi(embeddingTexts);
 
@@ -163,20 +164,20 @@ export class TrendsService {
       // 일괄 DB 저장
       if (entities.length > 0) {
         await this.techTrendRepository.save(entities);
-        this.logger.log(`성공적으로 DB에 ${entities.length}개 글들을 저장했습니다.`);
+        this.logger.log(`[Pipeline] DB 저장 완료 | insertCount=${entities.length}`);
       }
 
-    } catch (error) {
-      this.logger.error('수집 파이프라인 처리 중 오류 발생', error);
+    } catch (error: any) {
+      this.logger.error(`[Pipeline] 파이프라인 처리 중 치명적 오류 발생 | error=${error.message}`, error.stack);
     } finally {
       this.isProcessing = false;
-      this.logger.log(`====== 수집 작업 종료 (총 저장: ${savedCount}개) ======`);
+      this.logger.log(`[Pipeline] 트렌드 수집 파이프라인 종료 | totalSaved=${savedCount}`);
     }
   }
 
   // 글 여러개에 대해 병렬로 본문 스크래핑
   private async fetchBatchContents(articleIds: number[]): Promise<Map<number, string>> {
-    this.logger.log(`${articleIds.length}개 글 본문 병렬 수집 시작...`);
+    this.logger.log(`[Scraper:DevTo] 본문 병렬 스크래핑 시작 | idsCount=${articleIds.length}`);
     const articleContentMap = new Map<number, string>();
 
     const promises = articleIds.map(async (id) => {
@@ -192,7 +193,7 @@ export class TrendsService {
       }
     });
 
-    this.logger.log(`총 ${articleContentMap.size}개 글 본문 수집 완료.`);
+    this.logger.log(`[Scraper:DevTo] 본문 병렬 스크래핑 완료 | successCount=${articleContentMap.size}`);
 
     return articleContentMap;
   }

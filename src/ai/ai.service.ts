@@ -58,7 +58,7 @@ export class AiService {
       const parsed: BatchEvaluationResult = JSON.parse(raw);
       return parsed.valuable_ids || [];
     } catch (error: any) {
-      this.logger.error(`배치 AI 평가 실패: ${error.message}`);
+      this.logger.error(`[AI:Groq] 배치 가치 평가 실패 | error=${error.message}`);
       return [];
     }
   }
@@ -112,7 +112,7 @@ export class AiService {
         tags: Array.isArray(parsed.tags) ? parsed.tags.join(', ') : parsed.tags || null,
       };
     } catch (error: any) {
-      this.logger.error(`단일 AI 요약 생성 실패 (${title}): ${error.message}`);
+      this.logger.error(`[AI:Groq] 단일 아티클 요약 실패 | title="${title}", error=${error.message}`);
       return null;
     }
   }
@@ -122,23 +122,21 @@ export class AiService {
     if (texts.length === 0) return [];
 
     try {
-      // embedContent의 contents 매개변수에 string[] 배열을 직접 전달 (API 1회 호출)
       const response = await this.gemini.models.embedContent({
         model: 'gemini-embedding-001',
-        contents: texts, // 10개의 string 배열 전달
+        contents: texts,
         config: {
-          outputDimensionality: 1536, // 1536차원 지정
+          outputDimensionality: 1536,
         },
       });
 
-      // 응답 결과(response.embeddings)에서 각 텍스트에 대한 float 배열을 순서대로 추출
       if (!response.embeddings || response.embeddings.length === 0) {
         return new Array(texts.length).fill([]);
       }
 
       return response.embeddings.map((e) => e.values || []);
     } catch (error: any) {
-      this.logger.error(`Gemini 임베딩 일괄 생성 실패: ${error.message}`);
+      this.logger.error(`[AI:Gemini] 임베딩 일괄 생성 실패 | error=${error.message}`);
       return new Array(texts.length).fill([]);
     }
   }

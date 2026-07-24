@@ -28,7 +28,7 @@ export class DevToScraper {
     } = options;
 
     try {
-      this.logger.log(`DEV.to 인기 글 목록 조회 중... (요청 개수: 100개)`);
+      this.logger.log(`[Scraper:DevTo] 인기 아티클 목록 수집 시작 | minReactions=${minReactions}, minComments=${minComments}`);
       
       const response = await axios.get(
         `${this.DEVTO_API_URL}?top=7&per_page=100`,
@@ -50,7 +50,7 @@ export class DevToScraper {
       // 좋아요 순으로 내림차순 정렬
       filteredArticles.sort((a: any, b: any) => (b.positive_reactions_count || 0) - (a.positive_reactions_count || 0));
 
-      this.logger.log(`DEV.to 원본 글 ${articles.length}개 중 ${filteredArticles.length}개 글이 품질 필터를 통과했습니다.`);
+      this.logger.log(`[Scraper:DevTo] 인기 아티클 품질 필터링 완료 | total=${articles.length}, filtered=${filteredArticles.length}`);
 
       return filteredArticles.map((article: any) => ({
         id: article.id,
@@ -60,7 +60,7 @@ export class DevToScraper {
       }));
 
     } catch (error: any) {
-      this.logger.error(`DEV.to 목록 수집 실패: ${error.message}`);
+      this.logger.error(`[Scraper:DevTo] 인기 아티클 목록 수집 실패 | error=${error.message}`);
       return [];
     }
   }
@@ -77,7 +77,7 @@ export class DevToScraper {
       return body || null;
 
     } catch (error: any) {
-      this.logger.error(`DEV.to 본문 수집 실패 (ID: ${articleId}): ${error.message}`);
+      this.logger.warn(`[Scraper:DevTo] 아티클 본문 수집 실패 | articleId=${articleId}, error=${error.message}`);
       return null;
     }
   }
