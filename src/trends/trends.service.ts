@@ -69,13 +69,6 @@ export class TrendsService {
       // 10개 단위 배치 분할
       const batches = chunkArray(filteredArticles, this.BATCH_SIZE);
 
-      // 처리 완료된 항목들을 모아둘 임시 배열
-      const collectedItems: Array<{
-        article: typeof filteredArticles[0];
-        summary: FinalSummaryResult;
-        embeddingText: string;
-      }> = [];
-
       // 배치 단위 처리 루프 (목표 개수 채울 때까지)
       for (const batch of batches) {
         if (savedCount >= this.TARGET_COUNT) {
@@ -101,8 +94,15 @@ export class TrendsService {
         const valuableIds = await this.aiService.filterBatchWithAi(batchPayload);
         this.logger.log(`[Pipeline] AI 가치 평가 완료 | valid=${validBatch.length}, selected=${valuableIds.length}`);
 
+        // 처리 완료된 항목들을 모아둘 임시 배열
+        const batchCollectedItems: Array<{
+          article: typeof filteredArticles[0];
+          summary: FinalSummaryResult;
+          embeddingText: string;
+        }> = [];
+      
         // 10개 단위 배치 루프 실행
-        for (const article of batch) {
+        for (const article of validBatch) {
           if (savedCount >= this.TARGET_COUNT) break;
           if (!valuableIds.includes(article.id)) continue;
 
@@ -114,59 +114,49 @@ export class TrendsService {
           const cleanContent = sanitizeAndFilter(content, 5000);
 
           // AI 요약
-          this.logger.log(`AI 요약 시작..`);
           const summary = await this.aiService.summarizeContentWithAi(article.title, cleanContent);
-          if (!summary) continue;
+          if (!summary) {
+            this.logger.warn('[Pipeline] 요약 내용이 없음 | action=terminate');
+            continue;
+          }
 
-          collectedItems.push({
-            article,
-            summary,
-            embeddingText: `제목: ${summary.title}\n태그: ${summary.tags || ''}\n요약: ${summary.short_summary.join(' ')}`,
-          });
+          const embeddingText = `제목: ${summary.title}\n태그: ${summary.tags || ''}\n요약: ${summary.short_summary.join(' ')}`;
+
+          batchCollectedItems.push({ article, summary, embeddingText });
 
           savedCount++;
           this.logger.log(`[Pipeline] 아티클 요약 완료 | progress=${savedCount}/${this.TARGET_COUNT}, articleId=${article.id}`);
 
           await delaySeconds(3);
         }
-      }
 
-      if (collectedItems.length === 0) {
-        this.logger.warn('[Pipeline] 수집 및 요약된 항목 없음 | action=terminate');
-        return;
-      }
+        if (batchCollectedItems.length === 0) {
+          this.logger.warn('[Pipeline] 수집 및 요약된 항목 없음 | action=terminate');
+          continue;
+        }
 
-      this.logger.log(`[Pipeline] 벡터 임베딩 생성 시작 | count=${collectedItems.length}`);
-      const embeddingTexts = collectedItems.map((item) => item.embeddingText);
-      const embeddingVectors = await this.aiService.vectorEmbeddingWithAi(embeddingTexts);
+        this.logger.log(`[Pipeline] 배치 단위 벡터 임베딩 생성 시작 | count=${batchCollectedItems.length}`);
+        const embeddingTexts = batchCollectedItems.map((item) => item.embeddingText);
+        const embeddingVectors = await this.aiService.vectorEmbeddingWithAi(embeddingTexts);
 
-      // Entity 생성 및 매핑
-      const entities: TechTrend[] = [];
-      collectedItems.forEach((item, index) => {
-        const { article, summary } = item;
-        const embeddingVector = embeddingVectors[index] || null;
-
-        const entity = this.techTrendRepository.create({
-          source: 'dev.to',
-          source_id: String(article.id),
-          title: summary.title,
-          short_summary: summary.short_summary,
-          long_summary: summary.long_summary,
-          link_url: article.url,
-          technical_tags: summary.tags,
-          embedding: embeddingVector,
-          created_at: new Date(article.created_at),
+        // DB Entity 생성/매핑
+        const entities = batchCollectedItems.map((item, index) => {
+          return this.techTrendRepository.create({
+            source: 'dev.to',
+            source_id: String(item.article.id),
+            title: item.summary.title,
+            short_summary: item.summary.short_summary,
+            long_summary: item.summary.long_summary,
+            link_url: item.article.url,
+            technical_tags: item.summary.tags,
+            embedding: embeddingVectors[index] || null,
+            created_at: new Date(item.article.created_at),
+          });
         });
-
-        entities.push(entity);
-      });
-
-      // 일괄 DB 저장
-      if (entities.length > 0) {
+        // DB 배치 단위 저장
         await this.techTrendRepository.save(entities);
         this.logger.log(`[Pipeline] DB 저장 완료 | insertCount=${entities.length}`);
       }
-
     } catch (error: any) {
       this.logger.error(`[Pipeline] 파이프라인 처리 중 치명적 오류 발생 | error=${error.message}`, error.stack);
     } finally {
