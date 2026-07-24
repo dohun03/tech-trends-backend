@@ -3,18 +3,18 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { TechTrend } from '../database/entities/tech-trend.entity';
 import { TrendsService } from './trends.service';
 import { DevToScraper } from './scrapers/devto.scraper';
-// import { GeminiService } from './ai/gemini.service';
-// import { TrendsScheduler } from './trends.scheduler';
+import { AiModule } from 'ai/ai.module';
+import { TrendsScheduler } from './trends.scheduler';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([TechTrend]),
+    AiModule,
   ],
   providers: [
     TrendsService,
+    TrendsScheduler,
     DevToScraper,
-    // GeminiService,
-    // TrendsScheduler,
   ],
   exports: [
     TrendsService,
