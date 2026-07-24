@@ -4,6 +4,7 @@ import { In, Repository } from 'typeorm';
 import { DevToScraper } from './scrapers/devto.scraper';
 import { TechTrend } from 'database/entities/tech-trend.entity';
 import Groq from 'groq-sdk';
+import { GoogleGenAI } from '@google/genai';
 import { Cron } from '@nestjs/schedule';
 
 interface BatchEvaluationResult {
@@ -21,6 +22,8 @@ interface FinalSummaryResult {
 export class TrendsService {
   private readonly logger = new Logger(TrendsService.name);
   private groq: Groq;
+  private gemini: GoogleGenAI;
+
   private isProcessing = false;
 
   private readonly TARGET_COUNT = 10;
@@ -34,6 +37,7 @@ export class TrendsService {
     private readonly techTrendRepository: Repository<TechTrend>,
   ) {
     this.groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    this.gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
   }
 
   @Cron('0 1 * * *', { name: 'devto-trends-collector', timeZone: 'Asia/Seoul' })
@@ -73,8 +77,15 @@ export class TrendsService {
       const existingSet = new Set(existingTrends.map((t) => t.source_id));
       const filteredArticles = articles.filter((a) => !existingSet.has(String(a.id)));
 
-      // 10개 단위 배치 분할 (2중 배열)
+      // 10개 단위 배치 분할
       const batches = this.chunkArray(filteredArticles, this.BATCH_SIZE);
+
+      // 요약 완료된 항목들을 모아둘 임시 배열 (루프 외부로 이동)
+      const collectedItems: Array<{
+        article: typeof filteredArticles[0];
+        summary: FinalSummaryResult;
+        embeddingText: string;
+      }> = [];
 
       // 배치 단위 처리 루프 (목표 개수 채울 때까지)
       for (const batch of batches) {
@@ -97,7 +108,6 @@ export class TrendsService {
 
         // 10개 단위 배치 루프 실행
         for (const article of batch) {
-          // 10개 이하 / 필터링된 것만 실행
           if (savedCount >= this.TARGET_COUNT) break;
           if (!valuableIds.includes(article.id)) continue;
 
@@ -113,27 +123,56 @@ export class TrendsService {
           const summary = await this.contentSummaryWithAi(article.title, cleanContent);
           if (!summary) continue;
 
-          // DB 저장
-          const entity = this.techTrendRepository.create({
-            source: 'dev.to',
-            source_id: String(article.id),
-            title: summary.title,
-            short_summary: summary.short_summary,
-            long_summary: summary.long_summary,
-            link_url: article.url,
-            technical_tags: summary.tags,
-            created_at: new Date(article.created_at),
+          collectedItems.push({
+            article,
+            summary,
+            embeddingText: `제목: ${summary.title}\n태그: ${summary.tags || ''}\n요약: ${summary.short_summary.join(' ')}`,
           });
-          await this.techTrendRepository.save(entity);
 
           savedCount++;
-
           this.logger.log(`저장 완료 [${savedCount}/${this.TARGET_COUNT}]: ${summary.title}`);
-          this.logger.log(`2초 뒤 루프 재실행`);
 
           await this.delaySeconds(2);
         }
       }
+
+      if (collectedItems.length === 0) {
+        this.logger.warn('수집 및 요약된 항목이 없습니다.');
+        return;
+      }
+
+      // 모인 요약 텍스트들에 대해 Gemini 임베딩 API 일괄 호출
+      this.logger.log(`총 ${collectedItems.length}개 항목에 대한 임베딩 생성 시작...`);
+      const embeddingTexts = collectedItems.map((item) => item.embeddingText);
+      const embeddingVectors = await this.generateEmbeddings(embeddingTexts);
+
+      // Entity 생성 및 매핑
+      const entities: TechTrend[] = [];
+      collectedItems.forEach((item, index) => {
+        const { article, summary } = item;
+        const embeddingVector = embeddingVectors[index] || null;
+
+        const entity = this.techTrendRepository.create({
+          source: 'dev.to',
+          source_id: String(article.id),
+          title: summary.title,
+          short_summary: summary.short_summary,
+          long_summary: summary.long_summary,
+          link_url: article.url,
+          technical_tags: summary.tags,
+          embedding: embeddingVector,
+          created_at: new Date(article.created_at),
+        });
+
+        entities.push(entity);
+      });
+
+      // 일괄 DB 저장
+      if (entities.length > 0) {
+        await this.techTrendRepository.save(entities);
+        this.logger.log(`성공적으로 DB에 ${entities.length}개 글들을 저장했습니다.`);
+      }
+
     } catch (error) {
       this.logger.error('수집 파이프라인 처리 중 오류 발생', error);
     } finally {
@@ -253,6 +292,32 @@ export class TrendsService {
     } catch (error: any) {
       this.logger.error(`단일 AI 요약 생성 실패 (${title}): ${error.message}`);
       return null;
+    }
+  }
+
+  // GEMINI AI 임베딩 생성
+  private async generateEmbeddings(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return [];
+
+    try {
+      // embedContent의 contents 매개변수에 string[] 배열을 직접 전달 (API 1회 호출)
+      const response = await this.gemini.models.embedContent({
+        model: 'gemini-embedding-001',
+        contents: texts, // 10개의 string 배열 전달
+        config: {
+          outputDimensionality: 1536, // 1536차원 지정
+        },
+      });
+
+      // 응답 결과(response.embeddings)에서 각 텍스트에 대한 float 배열을 순서대로 추출
+      if (!response.embeddings || response.embeddings.length === 0) {
+        return new Array(texts.length).fill([]);
+      }
+
+      return response.embeddings.map((e) => e.values || []);
+    } catch (error: any) {
+      this.logger.error(`Gemini 임베딩 일괄 생성 실패: ${error.message}`);
+      return new Array(texts.length).fill([]);
     }
   }
 
