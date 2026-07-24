@@ -17,8 +17,9 @@ import { TechTrend } from './entities/tech-trend.entity';
         entities: [TechTrend],
         synchronize: true,
         logging: false,
-        timezone: '+09:00',
-        dateStrings: true,
+        extra: {
+          options: '-c timezone=Asia/Seoul',
+        },
       }),
     }),
   ],
