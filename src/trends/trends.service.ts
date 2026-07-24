@@ -21,7 +21,7 @@ export class TrendsService {
 
   private isProcessing = false;
 
-  private readonly TARGET_COUNT = 10;
+  private readonly TARGET_COUNT = 5;
   private readonly BATCH_SIZE = 10;
   private readonly MIN_REACTIONS = 10;
   private readonly MIN_COMMENTS = 1;
@@ -82,11 +82,17 @@ export class TrendsService {
         }
 
         const batchIds = batch.map((a) => a.id);
-        const contentMap = await this.fetchBatchContents(batchIds);
+        const articleContentMap = await this.fetchBatchContents(batchIds);
+        const validBatch = batch.filter((article) => articleContentMap.has(article.id));
+        if (validBatch.length === 0) {
+          this.logger.warn('본문을 불러오지 못했습니다.');
+          continue;
+        }
+
         const batchPayload = batch.map((article) => ({
           id: article.id,
           title: article.title,
-          snippet: sanitizeAndFilter(contentMap.get(article.id) || '', 800),
+          snippet: sanitizeAndFilter(articleContentMap.get(article.id) || '', 800),
         }));
 
         // AI 평가 (가치 있는 글 ID 선정)
@@ -99,7 +105,7 @@ export class TrendsService {
           if (!valuableIds.includes(article.id)) continue;
 
           // ID별로 원문 추출
-          const content = contentMap.get(article.id);
+          const content = articleContentMap.get(article.id);
           if (!content) continue;
 
           // 원본 글 5000자로 자름
@@ -171,18 +177,23 @@ export class TrendsService {
   // 글 여러개에 대해 병렬로 본문 스크래핑
   private async fetchBatchContents(articleIds: number[]): Promise<Map<number, string>> {
     this.logger.log(`${articleIds.length}개 글 본문 병렬 수집 시작...`);
-    const contentMap = new Map<number, string>();
+    const articleContentMap = new Map<number, string>();
 
     const promises = articleIds.map(async (id) => {
       const content = await this.devToScraper.getArticleContent(id);
       return { id, content };
     });
 
-    const results = await Promise.all(promises);
-    results.forEach(({ id, content }) => {
-      contentMap.set(id, content);
+    const results = await Promise.allSettled(promises);
+    
+    results.forEach((result) => {
+      if (result.status === 'fulfilled' && result.value.content !== null) {
+        articleContentMap.set(result.value.id, result.value.content);
+      }
     });
 
-    return contentMap;
+    this.logger.log(`총 ${articleContentMap.size}개 글 본문 수집 완료.`);
+
+    return articleContentMap;
   }
 }

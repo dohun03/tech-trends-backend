@@ -66,18 +66,19 @@ export class DevToScraper {
   }
 
   // 게시글 ID의 본문 스크래핑
-  async getArticleContent(articleId: number): Promise<string> {
+  async getArticleContent(articleId: number): Promise<string | null> {
     try {
       const response = await axios.get(`${this.DEVTO_API_URL}/${articleId}`, {
         headers: this.HEADERS,
         timeout: 5000,
       });
 
-      return response.data?.body_markdown?.trim() || '';
+      const body = response.data?.body_markdown?.trim();
+      return body || null;
 
     } catch (error: any) {
       this.logger.error(`DEV.to 본문 수집 실패 (ID: ${articleId}): ${error.message}`);
-      return '';
+      return null;
     }
   }
 }
