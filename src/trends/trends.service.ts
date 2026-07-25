@@ -19,7 +19,6 @@ interface FinalSummaryResult {
 interface SummarizedArticle {
   article: any; // 필요시 DevToArticle 타입으로 명시
   summary: FinalSummaryResult;
-  embeddingText: string;
 }
 
 interface EmbeddedArticle extends SummarizedArticle {
@@ -188,6 +187,7 @@ export class TrendsService {
     });
 
     this.logger.log(`[Scraper:DevTo] 본문 병렬 스크래핑 완료 | successCount=${contentMap.size}`);
+
     return contentMap;
   }
 
@@ -201,6 +201,7 @@ export class TrendsService {
 
     const valuableIds = await this.aiService.filterBatchWithAi(batchPayload);
     this.logger.log(`[Pipeline] AI 가치 평가 완료 | valid=${articles.length}, selected=${valuableIds.length}`);
+    
     return valuableIds;
   }
 
@@ -227,7 +228,6 @@ export class TrendsService {
         summaryResults.push({
           article,
           summary,
-          embeddingText: `제목: ${summary.title}\n태그: ${summary.tags || ''}\n요약: ${summary.short_summary.join(' ')}`,
         });
 
         const progress = currentSavedCount + summaryResults.length;
@@ -248,8 +248,10 @@ export class TrendsService {
     try {
       this.logger.log(`[Pipeline] 임베딩 생성 시작 | count=${articles.length}`);
       
-      const embeddingTexts = articles.map((a) => a.embeddingText);
-      const embeddingVectors = await this.aiService.vectorEmbeddingWithAi(embeddingTexts);
+      const embeddingTexts = articles.map((a) => this.buildEmbeddingText(a.summary));
+      const embeddingVectors = await this.aiService.vectorEmbeddingWithAi({
+        texts: embeddingTexts
+      });
 
       return articles.map((article, index) => ({
         ...article,
@@ -259,6 +261,17 @@ export class TrendsService {
       this.logger.error(`[Pipeline] 임베딩 생성 중 오류 발생 | error=${error.message}`);
       return [];
     }
+  }
+
+  // 포맷팅 전용 메서드
+  private buildEmbeddingText(summary: FinalSummaryResult): string {
+    const tagsStr = summary.tags || '';
+    const shortSummaryStr = Array.isArray(summary.short_summary) 
+      ? summary.short_summary.join(' ') 
+      : '';
+    const longSummaryStr = summary.long_summary || '';
+
+    return `[제목]: ${summary.title}\n[태그]: ${tagsStr}\n[요약]: ${shortSummaryStr}\n[상세]: ${longSummaryStr}`;
   }
 
   // DB 저장

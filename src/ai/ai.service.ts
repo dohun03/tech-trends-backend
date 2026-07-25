@@ -3,11 +3,24 @@ import Groq from 'groq-sdk';
 import { GoogleGenAI } from '@google/genai';
 
 export interface BatchEvaluationResult { valuable_ids: number[]; }
+
 export interface FinalSummaryResult {
   title: string;
   short_summary: string[];
   long_summary: string;
   tags: string | null;
+}
+
+export type GeminiTaskType =
+  | 'RETRIEVAL_DOCUMENT'
+  | 'RETRIEVAL_QUERY'
+  | 'SEMANTIC_SIMILARITY'
+  | 'CLASSIFICATION'
+  | 'CLUSTERING';
+
+export interface VectorEmbeddingParams {
+  texts: string[];
+  taskType?: GeminiTaskType;
 }
 
 @Injectable()
@@ -118,8 +131,11 @@ export class AiService {
   }
 
   // GEMINI AI 벡터 임베딩
-  async vectorEmbeddingWithAi(texts: string[]): Promise<number[][]> {
-    if (texts.length === 0) return [];
+  async vectorEmbeddingWithAi({
+    texts,
+    taskType = 'RETRIEVAL_DOCUMENT',
+  }: VectorEmbeddingParams): Promise<number[][]> {
+    if (!texts || texts.length === 0) return [];
 
     try {
       const response = await this.gemini.models.embedContent({
@@ -127,6 +143,7 @@ export class AiService {
         contents: texts,
         config: {
           outputDimensionality: 1536,
+          taskType,
         },
       });
 
@@ -143,7 +160,13 @@ export class AiService {
 
   // GEMINI AI 벡터 임베딩 (검색 기능)
   async embedSearchQuery(query: string): Promise<number[] | null> {
-    const vectors = await this.vectorEmbeddingWithAi([query]);
+    if (!query) return null;
+
+    const vectors = await this.vectorEmbeddingWithAi({
+      texts: [query],
+      taskType: 'RETRIEVAL_QUERY',
+    });
+
     return vectors.length > 0 && vectors[0].length > 0 ? vectors[0] : null;
   }
 }
