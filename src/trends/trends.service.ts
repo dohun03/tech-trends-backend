@@ -263,9 +263,11 @@ export class TrendsService {
 
   // DB 저장
   private async saveTrends(articles: EmbeddedArticle[]): Promise<number> {
-    try {
-      const entities = articles.map((item) => {
-        return this.techTrendRepository.create({
+    let savedCount = 0;
+
+    for (const item of articles) {
+      try {
+        const entity = this.techTrendRepository.create({
           source: 'dev.to',
           source_id: String(item.article.id),
           title: item.summary.title,
@@ -276,16 +278,18 @@ export class TrendsService {
           embedding: item.embeddingVector,
           created_at: new Date(item.article.created_at),
         });
-      });
 
-      await this.techTrendRepository.save(entities);
-      this.logger.log(`[Pipeline] DB 저장 완료 | insertCount=${entities.length}`);
-
-      return entities.length;
-
-    } catch (error: any) {
-      this.logger.error(`[Pipeline] DB 저장 중 오류 발생 | error=${error.message}`);
-      return 0;
+        await this.techTrendRepository.save(entity);
+        savedCount++;
+      } catch (error: any) {
+        this.logger.error(
+          `[Pipeline] 개별 아티클 DB 저장 실패 | articleId=${item.article.id}, error=${error.message}`,
+        );
+      }
     }
+
+    this.logger.log(`[Pipeline] DB 저장 완료 | insertCount=${savedCount}/${articles.length}`);
+
+    return savedCount;
   }
 }
