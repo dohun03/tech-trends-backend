@@ -140,4 +140,10 @@ export class AiService {
       return new Array(texts.length).fill([]);
     }
   }
+
+  // GEMINI AI 벡터 임베딩 (검색 기능)
+  async embedSearchQuery(query: string): Promise<number[] | null> {
+    const vectors = await this.vectorEmbeddingWithAi([query]);
+    return vectors.length > 0 && vectors[0].length > 0 ? vectors[0] : null;
+  }
 }
