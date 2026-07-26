@@ -11,17 +11,7 @@ export interface FinalSummaryResult {
   tags: string | null;
 }
 
-export type GeminiTaskType =
-  | 'RETRIEVAL_DOCUMENT'
-  | 'RETRIEVAL_QUERY'
-  | 'SEMANTIC_SIMILARITY'
-  | 'CLASSIFICATION'
-  | 'CLUSTERING';
-
-export interface VectorEmbeddingParams {
-  texts: string[];
-  taskType?: GeminiTaskType;
-}
+type EmbeddingTaskType = 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY';
 
 @Injectable()
 export class AiService {
@@ -131,19 +121,19 @@ export class AiService {
   }
 
   // GEMINI AI 벡터 임베딩
-  async vectorEmbeddingWithAi({
-    texts,
-    taskType = 'RETRIEVAL_DOCUMENT',
-  }: VectorEmbeddingParams): Promise<number[][]> {
+  async vectorEmbeddingWithAi(
+    texts: string[],
+    taskType?: EmbeddingTaskType,
+  ): Promise<number[][]> {
     if (!texts || texts.length === 0) return [];
 
     try {
       const response = await this.gemini.models.embedContent({
-        model: 'gemini-embedding-001',
+        model: 'gemini-embedding-2',
         contents: texts,
         config: {
           outputDimensionality: 1536,
-          taskType,
+          ...(taskType ? { taskType } : {}),
         },
       });
 
@@ -162,10 +152,7 @@ export class AiService {
   async embedSearchQuery(query: string): Promise<number[] | null> {
     if (!query) return null;
 
-    const vectors = await this.vectorEmbeddingWithAi({
-      texts: [query],
-      taskType: 'RETRIEVAL_QUERY',
-    });
+    const vectors = await this.vectorEmbeddingWithAi([query], 'RETRIEVAL_QUERY');
 
     return vectors.length > 0 && vectors[0].length > 0 ? vectors[0] : null;
   }

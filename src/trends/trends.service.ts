@@ -249,9 +249,7 @@ export class TrendsService {
       this.logger.log(`[Pipeline] 임베딩 생성 시작 | count=${articles.length}`);
       
       const embeddingTexts = articles.map((a) => this.buildEmbeddingText(a.summary));
-      const embeddingVectors = await this.aiService.vectorEmbeddingWithAi({
-        texts: embeddingTexts
-      });
+      const embeddingVectors = await this.aiService.vectorEmbeddingWithAi(embeddingTexts, 'RETRIEVAL_DOCUMENT');
 
       return articles.map((article, index) => ({
         ...article,
