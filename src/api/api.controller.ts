@@ -16,9 +16,10 @@ export class ApiController {
     @Query('search') search?: string,
     @Query('source') source?: string,
     @Query('isNew') isNew?: string,
+    @Query('sortBy') sortBy?: 'relevance' | 'date',
     @Query('sort') sort?: 'ASC' | 'DESC',
   ) {
-    return this.apiService.getTrends({ page, limit, search, source, isNew, sort });
+    return this.apiService.getTrends({ page, limit, search, source, isNew, sortBy, sort });
   }
 
   @Get('trends/sources')

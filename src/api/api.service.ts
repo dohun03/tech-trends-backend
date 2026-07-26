@@ -1,4 +1,3 @@
-// src/api/api.service.ts
 import { Injectable, Logger, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -21,6 +20,7 @@ async getTrends(query: {
     search?: string;
     source?: string;
     isNew?: string;
+    sortBy?: 'relevance' | 'date';
     sort?: 'ASC' | 'DESC';
   }) {
     try {
@@ -28,9 +28,10 @@ async getTrends(query: {
       const limit = Number(query.limit) || 5;
       const search = query.search || '';
       const source = query.source || 'ALL';
-      const sort = query.sort === 'ASC' ? 'ASC' : 'DESC';
       const isNew = query.isNew === 'true';
-
+      const sortBy = search ? (query.sortBy || 'relevance') : 'date';
+      const sort = query.sort === 'ASC' ? 'ASC' : 'DESC';
+      
       const queryBuilder = this.techTrendRepository.createQueryBuilder('trend')
         .select([
           'trend.id',
@@ -55,7 +56,7 @@ async getTrends(query: {
           .andWhere("trend.mined_at < CURRENT_DATE + INTERVAL '1 day'");
       }
 
-      // 검색 여부에 따른 정렬 분기 처리
+      // 검색어가 존재하는 경우
       if (search) {
         const queryVector = await this.aiService.embedSearchQuery(search);
         if (!queryVector) {
@@ -69,10 +70,22 @@ async getTrends(query: {
           .addSelect('trend.embedding <=> :vector', 'distance')
           .setParameter('vector', vectorString)
           .andWhere('trend.embedding IS NOT NULL')
-          .andWhere('(trend.embedding <=> :vector) <= :threshold', { threshold: DISTANCE_THRESHOLD })
-          .orderBy('distance', 'ASC'); // 유사도 높은 순
-      } else {
-        // 검색어 없을 시 날짜순 정렬
+          .andWhere('(trend.embedding <=> :vector) <= :threshold', { threshold: DISTANCE_THRESHOLD });
+
+        // 사용자가 검색 상태에서 명시적으로 'date' 정렬을 선택한 경우
+        if (sortBy === 'date') {
+          queryBuilder
+            .orderBy('trend.created_at', sort)
+            .addOrderBy('distance', 'ASC');
+        } else {
+          // 기본값: 정확도(연관도) 순 정렬 (동점 시 최신순)
+          queryBuilder
+            .orderBy('distance', 'ASC')
+            .addOrderBy('trend.created_at', sort);
+        }
+      } 
+      // 검색어가 없는 경우 (기본 목록)
+      else {
         queryBuilder
           .orderBy('trend.created_at', sort)
           .addOrderBy('trend.id', 'DESC');
