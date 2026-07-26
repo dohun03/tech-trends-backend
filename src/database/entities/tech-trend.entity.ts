@@ -1,8 +1,17 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Index, Unique } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  Index,
+  Unique,
+} from 'typeorm';
 
 @Entity('tbl_tech_trends')
 @Unique('UQ_source_source_id', ['source', 'source_id'])
 @Index('IDX_source_created_at', ['source', 'created_at'])
+@Index('IDX_tech_trends_fts', ['search_document'])
+@Index('IDX_tech_trends_embedding', ['embedding'])
 export class TechTrend {
   @PrimaryGeneratedColumn()
   id!: number;
@@ -26,17 +35,24 @@ export class TechTrend {
   link_url!: string;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
-  @Index('IDX_technical_tags') 
+  @Index('IDX_technical_tags')
   technical_tags!: string | null;
 
   @Column('vector', { length: 1536, nullable: true })
   embedding!: number[] | null;
 
-  // 원본 글 작성일자 (정렬용)
+  @Column({
+    type: 'tsvector',
+    select: false,
+    nullable: true,
+    insert: false,
+    update: false,
+  })
+  search_document!: string;
+
   @Column({ type: 'date' })
   created_at!: Date;
 
-  // 시스템 수집 완료 시각
   @CreateDateColumn({ type: 'timestamp' })
   mined_at!: Date;
 }

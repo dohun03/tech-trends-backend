@@ -44,7 +44,7 @@ export class TrendsService {
   private readonly logger = new Logger(TrendsService.name);
 
   private isProcessing = false;
-  private readonly TARGET_COUNT = 5;
+  private readonly TARGET_COUNT = 10;
   private readonly BATCH_SIZE = 10;
   private readonly MIN_REACTIONS = 10;
   private readonly MIN_COMMENTS = 1;

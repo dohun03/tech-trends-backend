@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { TechTrend } from './entities/tech-trend.entity';
+import { InitTechTrendSchema1785067830260 } from './migrations/1785067830260-InitTechTrendSchema';
 
 @Module({
   imports: [
@@ -15,8 +16,10 @@ import { TechTrend } from './entities/tech-trend.entity';
         password: configService.get<string>('DB_PASSWORD'),
         database: configService.get<string>('DB_DATABASE'),
         entities: [TechTrend],
-        synchronize: true,
-        logging: false,
+        synchronize: false,
+        migrationsRun: true,
+        migrations: [InitTechTrendSchema1785067830260],
+        logging: true,
         extra: {
           options: '-c timezone=Asia/Seoul',
         },

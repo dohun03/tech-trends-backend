@@ -64,7 +64,7 @@ async getTrends(query: {
         }
 
         const vectorString = `[${queryVector.join(',')}]`;
-        const DISTANCE_THRESHOLD = 0.45;
+        const DISTANCE_THRESHOLD = 0.33;
 
         queryBuilder
           .addSelect('trend.embedding <=> :vector', 'distance')
