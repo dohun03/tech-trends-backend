@@ -10,6 +10,8 @@ import {
 @Entity('tbl_tech_trends')
 @Unique('UQ_source_source_id', ['source', 'source_id'])
 @Index('IDX_source_created_at', ['source', 'created_at'])
+@Index('IDX_created_at', ['created_at'])
+@Index('IDX_mined_at', ['mined_at'])
 @Index('IDX_tech_trends_fts', ['search_document'])
 @Index('IDX_tech_trends_embedding', ['embedding'])
 export class TechTrend {
@@ -35,7 +37,6 @@ export class TechTrend {
   link_url!: string;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
-  @Index('IDX_technical_tags')
   technical_tags!: string | null;
 
   @Column('vector', { length: 1536, nullable: true })

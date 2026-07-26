@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { TechTrend } from './entities/tech-trend.entity';
 import { InitTechTrendSchema1785067830260 } from './migrations/1785067830260-InitTechTrendSchema';
+import { AddTechTrendSearchIndexes1785074539944 } from './migrations/1785074539944-AddTechTrendSearchIndexes';
 
 @Module({
   imports: [
@@ -18,8 +19,11 @@ import { InitTechTrendSchema1785067830260 } from './migrations/1785067830260-Ini
         entities: [TechTrend],
         synchronize: false,
         migrationsRun: true,
-        migrations: [InitTechTrendSchema1785067830260],
-        logging: true,
+        migrations: [
+          InitTechTrendSchema1785067830260,
+          AddTechTrendSearchIndexes1785074539944
+        ],
+        logging: false,
         extra: {
           options: '-c timezone=Asia/Seoul',
         },
