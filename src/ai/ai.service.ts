@@ -2,6 +2,22 @@ import { Injectable, Logger } from '@nestjs/common';
 import Groq from 'groq-sdk';
 import { GoogleGenAI } from '@google/genai';
 
+// === DTO / Params 인터페이스 정의 ===
+export interface BatchEvaluationItem {
+  id: number;
+  title: string;
+  snippet: string;
+}
+
+export interface FilterBatchParams {
+  items: BatchEvaluationItem[];
+}
+
+export interface SummarizeContentParams {
+  title: string;
+  content: string;
+}
+
 export interface BatchEvaluationResult {
   valuable_ids: number[];
 }
@@ -25,6 +41,13 @@ export interface VectorEmbeddingParams {
   taskType?: GeminiTaskType;
 }
 
+export interface ExecuteWithRetryParams<T> {
+  operation: () => Promise<T>;
+  context: string;
+  maxRetries?: number;
+  baseDelayMs?: number;
+}
+
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
@@ -42,14 +65,36 @@ export class AiService {
     });
   }
 
-  // GROQ(QWEN) AI 평가
-  async filterBatchWithAi(
-    items: Array<{
-      id: number;
-      title: string;
-      snippet: string;
-    }>,
-  ): Promise<number[]> {
+  /**
+   * [공통 재시도 로직] 객체 파라미터 적용
+   */
+  private async executeWithRetry<T>(params: ExecuteWithRetryParams<T>): Promise<T> {
+    const { operation, context, maxRetries = 3, baseDelayMs = 2000 } = params;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // 성공: 해당 함수 실행 후 그대로 반환
+        return await operation();
+      } catch (error: any) {
+        // 실패: 재시도 로직
+        if (attempt === maxRetries) {
+          this.logger.error(`[Retry:${context}] 최종 실패 (재시도 ${attempt}회 초과) | error=${error.message}`);
+          throw error;
+        }
+
+        const delay = baseDelayMs * Math.pow(2, attempt - 1);
+        this.logger.warn(`[Retry:${context}] 실패, ${delay}ms 후 재시도 (${attempt}/${maxRetries}) | error=${error.message}`);
+        
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+    throw new Error('Unreachable code');
+  }
+
+  // GROQ(QWEN) AI 평가 (객체 파라미터)
+  async filterBatchWithAi(params: FilterBatchParams): Promise<number[]> {
+    const { items } = params;
+
     const prompt = `
     당신은 백엔드 개발자 시각의 IT 트렌드 큐레이터입니다.
     아래 10개 아티클 목록(제목 및 800자 요약)을 읽고,
@@ -69,45 +114,36 @@ export class AiService {
     `;
 
     try {
-      const response = await this.groq.chat.completions.create({
-        model: 'qwen/qwen3.6-27b',
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        response_format: {
-          type: 'json_object',
+      const parsed = await this.executeWithRetry({
+        operation: async () => {
+          const response = await this.groq.chat.completions.create({
+            model: 'qwen/qwen3.6-27b',
+            messages: [{ role: 'user', content: prompt }],
+            response_format: { type: 'json_object' },
+            temperature: 0.1,
+            max_completion_tokens: 4096,
+            reasoning_effort: 'none',
+          });
+
+          const raw = response.choices[0]?.message?.content;
+          if (!raw) throw new Error('AI 응답이 비어 있습니다.');
+
+          return JSON.parse(raw) as BatchEvaluationResult;
         },
-        temperature: 0.1,
-        max_completion_tokens: 4096,
-        reasoning_effort: 'none',
+        context: 'Groq-FilterBatch',
       });
-
-      const raw = response.choices[0]?.message?.content;
-
-      if (!raw) {
-        return [];
-      }
-
-      const parsed: BatchEvaluationResult = JSON.parse(raw);
 
       return parsed.valuable_ids || [];
     } catch (error: any) {
-      this.logger.error(
-        `[AI:Groq] 배치 가치 평가 실패 | error=${error.message}`,
-      );
-
+      this.logger.error(`[AI:Groq] 배치 가치 평가 최종 실패. 빈 배열 반환 | error=${error.message}`);
       return [];
     }
   }
 
-  // GROQ(QWEN) AI 요약
-  async summarizeContentWithAi(
-    title: string,
-    content: string,
-  ): Promise<FinalSummaryResult | null> {
+  // GROQ(QWEN) AI 요약 (객체 파라미터)
+  async summarizeContentWithAi(params: SummarizeContentParams): Promise<FinalSummaryResult | null> {
+    const { title, content } = params;
+
     const prompt = `
     당신은 IT 트렌드 전문 에디터입니다.
     제공된 개발 블로그 글을 한국인 백엔드 개발자 시각으로 요약하세요.
@@ -132,29 +168,24 @@ export class AiService {
     `;
 
     try {
-      const response = await this.groq.chat.completions.create({
-        model: 'qwen/qwen3.6-27b',
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        response_format: {
-          type: 'json_object',
+      const parsed = await this.executeWithRetry({
+        operation: async () => {
+          const response = await this.groq.chat.completions.create({
+            model: 'qwen/qwen3.6-27b',
+            messages: [{ role: 'user', content: prompt }],
+            response_format: { type: 'json_object' },
+            temperature: 0.2,
+            max_completion_tokens: 4096,
+            reasoning_effort: 'none',
+          });
+
+          const raw = response.choices[0]?.message?.content;
+          if (!raw) throw new Error('AI 응답이 비어 있습니다.');
+
+          return JSON.parse(raw);
         },
-        temperature: 0.2,
-        max_completion_tokens: 4096,
-        reasoning_effort: 'none',
+        context: `Groq-Summarize:${title.substring(0, 20)}`,
       });
-
-      const raw = response.choices[0]?.message?.content;
-
-      if (!raw) {
-        return null;
-      }
-
-      const parsed = JSON.parse(raw);
 
       return {
         title: parsed.title || title,
@@ -167,67 +198,56 @@ export class AiService {
           : parsed.tags || null,
       };
     } catch (error: any) {
-      this.logger.error(
-        `[AI:Groq] 단일 아티클 요약 실패 | title="${title}", error=${error.message}`,
-      );
-
+      this.logger.error(`[AI:Groq] 단일 아티클 요약 최종 실패. null 반환 | title="${title}", error=${error.message}`);
       return null;
     }
   }
 
-  // GEMINI AI 벡터 임베딩
+  // GEMINI AI 벡터 임베딩 (객체 파라미터 - 기존 동일)
   async vectorEmbeddingWithAi({
     texts,
     taskType = 'RETRIEVAL_DOCUMENT',
   }: VectorEmbeddingParams): Promise<number[][]> {
-    if (!texts || texts.length === 0) {
-      return [];
-    }
+    if (!texts || texts.length === 0) return [];
 
     try {
-      const response = await this.gemini.models.embedContent({
-        model: 'gemini-embedding-001',
-        contents: texts,
-        config: {
-          outputDimensionality: 1536,
-          taskType,
+      const embeddings = await this.executeWithRetry({
+        operation: async () => {
+          const response = await this.gemini.models.embedContent({
+            model: 'gemini-embedding-001',
+            contents: texts,
+            config: {
+              outputDimensionality: 1536,
+              taskType,
+            },
+          });
+
+          if (!response.embeddings || response.embeddings.length === 0) {
+            throw new Error('임베딩 결과가 비어 있습니다.');
+          }
+
+          return response.embeddings;
         },
+        context: 'Gemini-Embedding',
+        baseDelayMs: 3000,
       });
 
-      if (
-        !response.embeddings ||
-        response.embeddings.length === 0
-      ) {
-        return new Array(texts.length).fill([]);
-      }
-
-      return response.embeddings.map(
-        (embedding) => embedding.values || [],
-      );
+      return embeddings.map((embedding) => embedding.values || []);
     } catch (error: any) {
-      this.logger.error(
-        `[AI:Gemini] 임베딩 일괄 생성 실패 | error=${error.message}`,
-      );
-
-      return new Array(texts.length).fill([]);
+      this.logger.error(`[AI:Gemini] 임베딩 일괄 생성 최종 실패. 빈 배열 반환 | error=${error.message}`);
+      return [];
     }
   }
 
   // GEMINI AI 벡터 임베딩 (검색 기능)
-  async embedSearchQuery(
-    query: string,
-  ): Promise<number[] | null> {
-    if (!query) {
-      return null;
-    }
+  async embedSearchQuery(query: string): Promise<number[] | null> {
+    if (!query) return null;
 
     const vectors = await this.vectorEmbeddingWithAi({
       texts: [query],
       taskType: 'RETRIEVAL_QUERY',
     });
 
-    return vectors.length > 0 && vectors[0].length > 0
-      ? vectors[0]
-      : null;
+    return vectors.length > 0 && vectors[0].length > 0 ? vectors[0] : null;
   }
 }

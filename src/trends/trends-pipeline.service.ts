@@ -48,7 +48,7 @@ export class TrendsPipelineService {
   private readonly logger = new Logger(TrendsPipelineService.name);
 
   private isProcessing = false;
-  private readonly TARGET_COUNT = 5;
+  private readonly TARGET_SAVE_COUNT = 10;
   private readonly BATCH_SIZE = 10;
   private readonly MIN_REACTIONS = 10;
   private readonly MIN_COMMENTS = 1;
@@ -68,7 +68,7 @@ export class TrendsPipelineService {
 
     this.isProcessing = true;
     let savedCount = 0;
-    this.logger.log(`[Pipeline] 트렌드 수집 파이프라인 시작 | targetCount=${this.TARGET_COUNT}`);
+    this.logger.log(`[Pipeline] 트렌드 수집 파이프라인 시작 | targetCount=${this.TARGET_SAVE_COUNT}`);
 
     try {
       // 외부 데이터 수집
@@ -92,12 +92,12 @@ export class TrendsPipelineService {
       const batches = chunkArray(filteredArticles, this.BATCH_SIZE);
 
       for (const batch of batches) {
-        if (savedCount >= this.TARGET_COUNT) {
-          this.logger.log(`[Pipeline] 목표 수량 달성 조기 종료 | target=${this.TARGET_COUNT}, current=${savedCount}`);
+        if (savedCount >= this.TARGET_SAVE_COUNT) {
+          this.logger.log(`[Pipeline] 목표 수량 달성 조기 종료 | target=${this.TARGET_SAVE_COUNT}, current=${savedCount}`);
           break;
         }
 
-        const limit = this.TARGET_COUNT - savedCount;
+        const limit = this.TARGET_SAVE_COUNT - savedCount;
         
         const insertedCount = await this.processBatch({
           batch,
@@ -122,7 +122,6 @@ export class TrendsPipelineService {
     // 본문 스크래핑
     const articleIds = batch.map((a) => a.id);
     const contentMap = await this.fetchBatchContents(articleIds);
-
     const validArticles = batch.filter((a) => contentMap.has(a.id));
     if (validArticles.length === 0) {
       this.logger.warn(`[Pipeline] 배치 내 유효 본문 없음 스킵`);
@@ -132,8 +131,12 @@ export class TrendsPipelineService {
     // AI 가치 평가
     const valuableIds = await this.evaluateArticlesWithAi(validArticles, contentMap);
     const targetArticles = validArticles.filter((a) => valuableIds.includes(a.id));
-
-    // 본문 요약
+    if (targetArticles.length === 0) {
+      this.logger.warn(`[Pipeline] AI 가치 평가를 통과된 항목 없음 스킵 | action=skip`);
+      return 0;
+    }
+    
+    // AI 본문 요약
     const summarizedArticles = await this.summarizeArticles({
       articles: targetArticles,
       contentMap,
@@ -141,14 +144,14 @@ export class TrendsPipelineService {
       currentSavedCount,
     });
     if (summarizedArticles.length === 0) {
-      this.logger.warn('[Pipeline] 수집 및 요약된 항목 없음 | action=terminate');
+      this.logger.warn('[Pipeline] AI 요약된 항목 없음 스킵 | action=skip');
       return 0;
     }
 
-    // 벡터 임베딩 생성
+    // AI 벡터 임베딩 생성
     const embeddedArticles = await this.generateEmbeddings(summarizedArticles);
     if (embeddedArticles.length === 0) {
-      this.logger.warn('[Pipeline] 수집 및 임베딩 항목 없음 | action=terminate');
+      this.logger.warn('[Pipeline] AI 임베딩 항목 없음 스킵 | action=skip');
       return 0;
     }
 
@@ -198,7 +201,7 @@ export class TrendsPipelineService {
       snippet: sanitizeAndFilter(contentMap.get(a.id) || '', 800),
     }));
 
-    const valuableIds = await this.aiService.filterBatchWithAi(batchPayload);
+    const valuableIds = await this.aiService.filterBatchWithAi({ items: batchPayload });
     this.logger.log(`[Pipeline] AI 가치 평가 완료 | valid=${articles.length}, selected=${valuableIds.length}`);
     
     return valuableIds;
@@ -218,7 +221,10 @@ export class TrendsPipelineService {
       const cleanContent = sanitizeAndFilter(content, 5000);
 
       try {
-        const summary = await this.aiService.summarizeContentWithAi(article.title, cleanContent);
+        const summary = await this.aiService.summarizeContentWithAi({
+          title: article.title,
+          content: cleanContent,
+        });
         if (!summary) {
           this.logger.warn(`[Pipeline] 요약 내용이 없음 | articleId=${article.id}, action=skip`);
           continue;
@@ -230,7 +236,7 @@ export class TrendsPipelineService {
         });
 
         const progress = currentSavedCount + summaryResults.length;
-        this.logger.log(`[Pipeline] 아티클 요약 완료 | progress=${progress}/${this.TARGET_COUNT}, articleId=${article.id}`);
+        this.logger.log(`[Pipeline] 아티클 요약 완료 | progress=${progress}/${this.TARGET_SAVE_COUNT}, articleId=${article.id}`);
 
         await delaySeconds(3);
 
