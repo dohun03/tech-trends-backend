@@ -2,8 +2,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { DatabaseModule } from './database/database.module';
-import { ApiModule } from './api/api.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { TrendsModule } from 'trends/trends.module';
 
 @Module({
   imports: [
@@ -13,7 +13,7 @@ import { ScheduleModule } from '@nestjs/schedule';
       envFilePath: '.env',
     }),
     DatabaseModule,
-    ApiModule,
+    TrendsModule,
   ],
 })
 export class AppModule {}

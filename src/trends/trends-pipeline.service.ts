@@ -2,10 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { DevToScraper } from './scrapers/devto.scraper';
-import { TechTrend } from 'database/entities/tech-trend.entity';
+import { TechTrend } from 'trends/entities/tech-trend.entity';
 import { AiService } from 'ai/ai.service';
 import { chunkArray } from 'common/utils/array.util';
-import { sanitizeAndFilter } from 'common/utils/text-filter.util';
+import { sanitizeAndFilter } from 'common/utils/text.util';
 import { delaySeconds } from 'common/utils/time.util';
 
 // 파이프라인 데이터 타입 정의 (데이터 변환 흐름 명확화)
@@ -40,8 +40,8 @@ interface SummarizeArticlesParams {
 }
 
 @Injectable()
-export class TrendsService {
-  private readonly logger = new Logger(TrendsService.name);
+export class TrendsPipelineService {
+  private readonly logger = new Logger(TrendsPipelineService.name);
 
   private isProcessing = false;
   private readonly TARGET_COUNT = 10;

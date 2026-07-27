@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { TechTrend } from './entities/tech-trend.entity';
+import { TechTrend } from '../trends/entities/tech-trend.entity';
 import { InitTechTrendSchema1785067830260 } from './migrations/1785067830260-InitTechTrendSchema';
 import { AddTechTrendSearchIndexes1785074539944 } from './migrations/1785074539944-AddTechTrendSearchIndexes';
 

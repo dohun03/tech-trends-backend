@@ -1,12 +1,13 @@
 import { Injectable, Logger, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { TechTrend } from '../database/entities/tech-trend.entity';
+import { TechTrend } from '../trends/entities/tech-trend.entity';
 import { AiService } from 'ai/ai.service';
+import { GetTrendsQueryDto } from './dto/get-trends-query.dto';
 
 @Injectable()
-export class ApiService {
-  private readonly logger = new Logger(ApiService.name);
+export class TrendsQueryService {
+  private readonly logger = new Logger(TrendsQueryService.name);
 
   constructor(
     @InjectRepository(TechTrend)
@@ -14,23 +15,18 @@ export class ApiService {
     private readonly aiService: AiService,
   ) {}
 
-async getTrends(query: {
-    page?: number;
-    limit?: number;
-    search?: string;
-    source?: string;
-    isNew?: string;
-    sortBy?: 'relevance' | 'date';
-    sort?: 'ASC' | 'DESC';
-  }) {
+async getTrends(query: GetTrendsQueryDto) {
     try {
-      const page = Number(query.page) || 1;
-      const limit = Number(query.limit) || 5;
-      const search = query.search || '';
-      const source = query.source || 'ALL';
-      const isNew = query.isNew === 'true';
+      const {
+        page = 1,
+        limit = 5,
+        search = '',
+        source = 'ALL',
+        isNew = false,
+        sort = 'DESC',
+      } = query;
+
       const sortBy = search ? (query.sortBy || 'relevance') : 'date';
-      const sort = query.sort === 'ASC' ? 'ASC' : 'DESC';
       
       const queryBuilder = this.techTrendRepository.createQueryBuilder('trend')
         .select([
