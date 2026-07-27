@@ -1,5 +1,5 @@
 import { Controller, Get, Query } from '@nestjs/common';
-import { TrendsPipelineService } from 'trends/trends-pipeline.service';
+import { TrendsPipelineService } from './trends-pipeline.service';
 import { TrendsQueryService } from './trends-query.service';
 import { GetTrendsQueryDto } from './dto/get-trends-query.dto';
 
@@ -10,23 +10,26 @@ export class TrendsController {
     private readonly trendsPipelineService: TrendsPipelineService,
   ) {}
 
+  // 트렌드 목록 / 검색 공통 진입점
   @Get('trends')
   getTrends(@Query() query: GetTrendsQueryDto) {
     return this.trendsQueryService.getTrends(query);
   }
 
+  // 출처 목록 조회
   @Get('trends/sources')
   async getSources() {
     return this.trendsQueryService.getUniqueSources();
   }
 
+  // 스크래핑 테스트용 엔드포인트
   @Get('test-scraping')
-  async triggerScrapingTest() {
+  async runScrapingTest() {
     await this.trendsPipelineService.collectAndProcessTrends();
-    
+
     return {
       success: true,
-      message: '백엔드 터미널 콘솔을 확인해보세요! 벨로그 데이터가 찍히고 있을 겁니다.',
+      message: '백엔드 터미널 콘솔을 확인해보세요!',
     };
   }
 }

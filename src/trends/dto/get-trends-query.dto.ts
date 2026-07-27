@@ -1,4 +1,4 @@
-import { IsIn, IsBoolean, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 
 export class GetTrendsQueryDto {
@@ -27,10 +27,6 @@ export class GetTrendsQueryDto {
   @Transform(({ value }) => value === 'true' || value === true)
   @IsBoolean()
   isNew?: boolean = false;
-
-  @IsOptional()
-  @IsIn(['relevance', 'date'], { message: 'sortBy는 relevance 또는 date만 허용됩니다.' })
-  sortBy?: 'relevance' | 'date';
 
   @IsOptional()
   @IsIn(['ASC', 'DESC'], { message: 'sort는 ASC 또는 DESC만 허용됩니다.' })

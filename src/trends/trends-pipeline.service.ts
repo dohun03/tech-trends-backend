@@ -1,12 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
 import { DevToScraper } from './scrapers/devto.scraper';
-import { TechTrend } from 'trends/entities/tech-trend.entity';
 import { AiService } from 'ai/ai.service';
 import { chunkArray } from 'common/utils/array.util';
 import { sanitizeAndFilter } from 'common/utils/text.util';
 import { delaySeconds } from 'common/utils/time.util';
+import { TechTrendRepository } from './repositories/tech-trend.repository';
 
 // 파이프라인 데이터 타입 정의 (데이터 변환 흐름 명확화)
 interface FinalSummaryResult {
@@ -16,24 +14,30 @@ interface FinalSummaryResult {
   tags: string | null;
 }
 
+interface DevToArticle {
+  id: number;
+  title: string;
+  url: string;
+  created_at: string | Date;
+}
+
 interface SummarizedArticle {
-  article: any; // 필요시 DevToArticle 타입으로 명시
+  article: DevToArticle;
   summary: FinalSummaryResult;
 }
 
 interface EmbeddedArticle extends SummarizedArticle {
-  embeddingVector: any; // 필요시 number[] 등으로 명시
+  embeddingVector: number[] | null;
 }
 
-// 메서드 파라미터 타입 정의 (객체 전달 방식 적용)
 interface ProcessBatchParams {
-  batch: any[];
+  batch: DevToArticle[];
   limit: number;
   currentSavedCount: number;
 }
 
 interface SummarizeArticlesParams {
-  articles: any[];
+  articles: DevToArticle[];
   contentMap: Map<number, string>;
   limit: number;
   currentSavedCount: number;
@@ -44,7 +48,7 @@ export class TrendsPipelineService {
   private readonly logger = new Logger(TrendsPipelineService.name);
 
   private isProcessing = false;
-  private readonly TARGET_COUNT = 10;
+  private readonly TARGET_COUNT = 5;
   private readonly BATCH_SIZE = 10;
   private readonly MIN_REACTIONS = 10;
   private readonly MIN_COMMENTS = 1;
@@ -52,8 +56,7 @@ export class TrendsPipelineService {
   constructor(
     private readonly devToScraper: DevToScraper,
     private readonly aiService: AiService,
-    @InjectRepository(TechTrend)
-    private readonly techTrendRepository: Repository<TechTrend>,
+    private readonly techTrendRepository: TechTrendRepository,
   ) {}
 
   // [메인 파이프라인]
@@ -157,11 +160,7 @@ export class TrendsPipelineService {
   // DB 중복 필터링
   private async excludeExistingArticles(articles: any[]): Promise<any[]> {
     const sourceIds = articles.map((a) => String(a.id));
-    const existingTrends = await this.techTrendRepository.find({
-      where: { source_id: In(sourceIds), source: 'dev.to' },
-      select: { source_id: true },
-    });
-    const existingSet = new Set(existingTrends.map((t) => t.source_id));
+    const existingSet = await this.techTrendRepository.findExistingSourceIds('dev.to', sourceIds);
     const filtered = articles.filter((a) => !existingSet.has(String(a.id)));
     
     this.logger.log(`[Pipeline] DB 중복 검증 완료 | raw=${articles.length}, new=${filtered.length}`);
@@ -278,7 +277,7 @@ export class TrendsPipelineService {
 
     for (const item of articles) {
       try {
-        const entity = this.techTrendRepository.create({
+        await this.techTrendRepository.saveTrend({
           source: 'dev.to',
           source_id: String(item.article.id),
           title: item.summary.title,
@@ -290,7 +289,6 @@ export class TrendsPipelineService {
           created_at: new Date(item.article.created_at),
         });
 
-        await this.techTrendRepository.save(entity);
         savedCount++;
       } catch (error: any) {
         this.logger.error(

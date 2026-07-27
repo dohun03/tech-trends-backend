@@ -7,6 +7,7 @@ import { AiModule } from 'ai/ai.module';
 import { TrendsScheduler } from './trends.scheduler';
 import { TrendsController } from './trends.controller';
 import { TrendsQueryService } from './trends-query.service';
+import { TechTrendRepository } from './repositories/tech-trend.repository';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { TrendsQueryService } from './trends-query.service';
   ],
   controllers: [TrendsController],
   providers: [
+    TechTrendRepository,
     TrendsQueryService,
     TrendsPipelineService,
     TrendsScheduler,
