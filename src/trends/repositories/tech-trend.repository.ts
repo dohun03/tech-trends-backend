@@ -144,9 +144,12 @@ export class TechTrendRepository {
     const { page, limit, search, source, isNew, vector } = params;
     const offset = (page - 1) * limit;
 
-    const candidateLimit = Math.max(20, limit * 3);
-    const rrfK = 60;
     const vectorString = `[${vector.join(',')}]`;
+    const candidateLimit =
+      Number(process.env.SEARCH_CANDIDATE_LIMIT ?? 50); // 각 상위 50개의 결과만 반영
+    const distanceThreshold =
+      Number(process.env.VECTOR_DISTANCE_THRESHOLD ?? 0.35); // 벡터 거리 임계치
+    const rrfK = 60;
 
     const commonWhere = `
       WHERE
@@ -157,10 +160,9 @@ export class TechTrendRepository {
         ))
     `;
 
-    // 키워드 후보군
+    // 키워드 후보군 쿼리
     const keywordSql = `
-      SELECT
-        trend.id,
+      SELECT trend.id,
         ROW_NUMBER() OVER (
           ORDER BY
             ts_rank(trend.search_document, plainto_tsquery('simple', $1)) DESC,
@@ -173,10 +175,9 @@ export class TechTrendRepository {
       LIMIT $5
     `;
 
-    // 벡터 후보군
+    // 벡터 후보군 쿼리
     const vectorSql = `
-      SELECT
-        trend.id,
+      SELECT trend.id,
         ROW_NUMBER() OVER (
           ORDER BY
             trend.embedding <=> CAST($2 AS vector) ASC,
@@ -186,89 +187,49 @@ export class TechTrendRepository {
       FROM tbl_tech_trends trend
       ${commonWhere}
         AND trend.embedding IS NOT NULL
+        AND trend.embedding <=> CAST($2 AS vector) <= ${distanceThreshold}
       LIMIT $5
     `;
 
     const dataSql = `
-      WITH keyword_ranked AS (
-        ${keywordSql}
-      ),
-      vector_ranked AS (
-        ${vectorSql}
-      ),
-      rrf AS (
-        SELECT
-          COALESCE(k.id, v.id) AS id,
-          COALESCE(1.0 / ($6 + k.rank), 0) +
-          COALESCE(1.0 / ($6 + v.rank), 0) AS rrf_score
-        FROM keyword_ranked k
-        FULL OUTER JOIN vector_ranked v
-          ON k.id = v.id
-      )
-      SELECT
-        trend.id,
-        trend.source,
-        trend.source_id,
-        trend.title,
-        trend.short_summary,
-        trend.long_summary,
-        trend.link_url,
-        trend.technical_tags,
-        trend.created_at,
-        trend.mined_at,
-        rrf.rrf_score
-      FROM rrf
-      JOIN tbl_tech_trends trend ON trend.id = rrf.id
+      WITH keyword_ranked AS (${keywordSql}),
+          vector_ranked AS (${vectorSql}),
+          rrf AS (
+            SELECT DISTINCT COALESCE(k.id,v.id) AS id,
+                    COALESCE(1.0 / ($6 + k.rank), 0) +
+                    COALESCE(1.0 / ($6 + v.rank), 0) AS rrf_score
+            FROM keyword_ranked k
+            FULL OUTER JOIN vector_ranked v ON k.id = v.id
+          )
+      SELECT trend.id, trend.source, trend.title, trend.short_summary, trend.long_summary,
+            trend.link_url, trend.technical_tags, trend.created_at, trend.mined_at,
+            rrf.rrf_score
+        FROM rrf
+        JOIN tbl_tech_trends trend ON trend.id = rrf.id
       ORDER BY rrf.rrf_score DESC, trend.created_at DESC, trend.id DESC
-      LIMIT $7 OFFSET $8
+      LIMIT $7 OFFSET $8;
     `;
 
     const countSql = `
-      WITH keyword_ranked AS (
-        ${keywordSql}
-      ),
-      vector_ranked AS (
-        ${vectorSql}
-      ),
-      rrf AS (
-        SELECT
-          COALESCE(k.id, v.id) AS id
-        FROM keyword_ranked k
-        FULL OUTER JOIN vector_ranked v
-          ON k.id = v.id
-      )
-      SELECT COUNT(*)::int AS total_count
-      FROM rrf
+      WITH keyword_ranked AS (${keywordSql}),
+          vector_ranked AS (${vectorSql}),
+          rrf AS (
+            SELECT DISTINCT COALESCE(k.id,v.id) AS id
+            FROM keyword_ranked k
+            FULL OUTER JOIN vector_ranked v ON k.id = v.id
+          )
+      SELECT COUNT(*)::int AS total_count FROM rrf;
     `;
 
-    const dataParams = [
-      search,         // $1
-      vectorString,   // $2
-      source,         // $3
-      isNew,          // $4
-      candidateLimit, // $5
-      rrfK,           // $6
-      limit,          // $7
-      offset,         // $8
-    ];
-
-    const countParams = [
-      search,         // $1
-      vectorString,   // $2
-      source,         // $3
-      isNew,          // $4
-      candidateLimit, // $5
-    ];
+    const dataParams = [search, vectorString, source, isNew, candidateLimit, rrfK, limit, offset];
+    const countParams = [search, vectorString, source, isNew, candidateLimit];
 
     const [dataRows, countRows] = await Promise.all([
       this.repository.query(dataSql, dataParams),
       this.repository.query(countSql, countParams),
     ]);
 
-    return {
-      data: dataRows,
-      totalCount: Number(countRows?.[0]?.total_count || 0),
-    };
+    return { data: dataRows, totalCount: Number(countRows?.[0]?.total_count || 0) };
   }
 
   // DB 중복 검증용 source_id 조회
