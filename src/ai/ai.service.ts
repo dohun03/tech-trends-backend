@@ -1,47 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import Groq from 'groq-sdk';
 import { GoogleGenAI } from '@google/genai';
+import {
+  BatchEvaluationResult,
+  FilterBatchParams,
+  FinalSummaryResult,
+  SummarizeContentParams,
+  VectorEmbeddingParams,
+} from './interfaces/ai.interface';
 
-// === DTO / Params 인터페이스 정의 ===
-export interface BatchEvaluationItem {
-  id: number;
-  title: string;
-  snippet: string;
-}
-
-export interface FilterBatchParams {
-  items: BatchEvaluationItem[];
-}
-
-export interface SummarizeContentParams {
-  title: string;
-  content: string;
-}
-
-export interface BatchEvaluationResult {
-  valuable_ids: number[];
-}
-
-export interface FinalSummaryResult {
-  title: string;
-  short_summary: string[];
-  long_summary: string;
-  tags: string | null;
-}
-
-export type GeminiTaskType =
-  | 'RETRIEVAL_DOCUMENT'
-  | 'RETRIEVAL_QUERY'
-  | 'SEMANTIC_SIMILARITY'
-  | 'CLASSIFICATION'
-  | 'CLUSTERING';
-
-export interface VectorEmbeddingParams {
-  texts: string[];
-  taskType?: GeminiTaskType;
-}
-
-export interface ExecuteWithRetryParams<T> {
+interface ExecuteWithRetryParams<T> {
   operation: () => Promise<T>;
   context: string;
   maxRetries?: number;
@@ -92,7 +60,7 @@ export class AiService {
   }
 
   // GROQ(QWEN) AI 평가 (객체 파라미터)
-  async filterBatchWithAi(params: FilterBatchParams): Promise<number[]> {
+  async filterBatchWithAi(params: FilterBatchParams): Promise<string[]> {
     const { items } = params;
 
     const prompt = `
@@ -203,7 +171,7 @@ export class AiService {
     }
   }
 
-  // GEMINI AI 벡터 임베딩 (객체 파라미터 - 기존 동일)
+  // GEMINI AI 벡터 임베딩
   async vectorEmbeddingWithAi({
     texts,
     taskType = 'RETRIEVAL_DOCUMENT',
