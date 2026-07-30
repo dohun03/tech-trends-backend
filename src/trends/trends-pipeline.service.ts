@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { DevToScraper } from './scrapers/devto.scraper';
 import { AiService } from '../ai/ai.service';
 import { chunkArray } from '../common/utils/array.util';
 import { sanitizeAndFilter } from '../common/utils/text.util';
@@ -7,6 +6,8 @@ import { delaySeconds } from '../common/utils/time.util';
 import { TechTrendRepository } from './repositories/tech-trend.repository';
 import { BaseArticle, IArticleScraper } from './interfaces/scraper.interface';
 import { FinalSummaryResult } from 'ai/interfaces/ai.interface';
+import { DevToScraper } from './scrapers/devto.scraper';
+import { GeekNewsScraper } from './scrapers/geek-news.scraper';
 
 // 서비스 내부 전용 타입 정의 (외부 파일 분리 필요 없음)
 interface SummarizedArticle {
@@ -43,12 +44,13 @@ export class TrendsPipelineService {
   private scrapers: IArticleScraper[];
 
   constructor(
-    private readonly devToScraper: DevToScraper,
     private readonly aiService: AiService,
     private readonly techTrendRepository: TechTrendRepository,
+    private readonly devToScraper: DevToScraper,
+    private readonly geekNewsScraper: GeekNewsScraper,
   ) {
     // 스크래퍼 배열 등록
-    this.scrapers = [this.devToScraper];
+    this.scrapers = [this.devToScraper, this.geekNewsScraper];
   }
 
   // [메인 파이프라인]

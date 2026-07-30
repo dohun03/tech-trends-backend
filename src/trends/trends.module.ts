@@ -2,12 +2,13 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TechTrend } from './entities/tech-trend.entity';
 import { TrendsPipelineService } from './trends-pipeline.service';
-import { DevToScraper } from './scrapers/devto.scraper';
 import { AiModule } from 'ai/ai.module';
 import { TrendsScheduler } from './trends.scheduler';
 import { TrendsController } from './trends.controller';
 import { TrendsQueryService } from './trends-query.service';
 import { TechTrendRepository } from './repositories/tech-trend.repository';
+import { DevToScraper } from './scrapers/devto.scraper';
+import { GeekNewsScraper } from './scrapers/geek-news.scraper';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { TechTrendRepository } from './repositories/tech-trend.repository';
     TrendsPipelineService,
     TrendsScheduler,
     DevToScraper,
+    GeekNewsScraper,
   ],
   exports: [
     TrendsPipelineService,
