@@ -39,6 +39,15 @@ export class TechTrend {
   @Column({ type: 'varchar', length: 255, nullable: true })
   technical_tags!: string | null;
 
+  @Column({ type: 'integer', nullable: true })
+  view_count!: number | null;
+
+  @Column({ type: 'integer', nullable: true })
+  like_count!: number | null;
+
+  @Column({ type: 'integer', nullable: true })
+  comment_count!: number | null;
+  
   @Column('vector', { length: 1536, nullable: true })
   embedding!: number[] | null;
 
