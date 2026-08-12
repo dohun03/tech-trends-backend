@@ -9,6 +9,7 @@ import { TrendsQueryService } from './trends-query.service';
 import { TechTrendRepository } from './repositories/tech-trend.repository';
 import { DevToScraper } from './scrapers/devto.scraper';
 import { GeekNewsScraper } from './scrapers/geek-news.scraper';
+import { StackOverflowScraper } from './scrapers/stackoverflow.scraper';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { GeekNewsScraper } from './scrapers/geek-news.scraper';
     TrendsScheduler,
     DevToScraper,
     GeekNewsScraper,
+    StackOverflowScraper,
   ],
   exports: [
     TrendsPipelineService,

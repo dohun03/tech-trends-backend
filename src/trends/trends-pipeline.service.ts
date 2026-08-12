@@ -8,6 +8,7 @@ import { Article, ArticleDetails, IArticleScraper } from './interfaces/scraper.i
 import { FinalSummaryResult } from 'ai/interfaces/ai.interface';
 import { DevToScraper } from './scrapers/devto.scraper';
 import { GeekNewsScraper } from './scrapers/geek-news.scraper';
+import { StackOverflowScraper } from './scrapers/stackoverflow.scraper';
 
 interface SummarizedArticle {
   article: Article;
@@ -32,8 +33,13 @@ export class TrendsPipelineService {
     private readonly techTrendRepository: TechTrendRepository,
     private readonly devToScraper: DevToScraper,
     private readonly geekNewsScraper: GeekNewsScraper,
+    private readonly stackOverflowScraper: StackOverflowScraper,
   ) {
-    this.scrapers = [this.devToScraper, this.geekNewsScraper];
+    this.scrapers = [
+      this.devToScraper,
+      this.geekNewsScraper,
+      this.stackOverflowScraper,
+    ];
   }
 
   // 메인 파이프라인

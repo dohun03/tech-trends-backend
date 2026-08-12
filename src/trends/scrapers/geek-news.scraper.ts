@@ -9,14 +9,13 @@ export class GeekNewsScraper implements IArticleScraper {
   private readonly logger = new Logger(GeekNewsScraper.name);
   private readonly GEEKNEWS_RSS_URL = 'https://news.hada.io/rss/news';
   private readonly GEEKNEWS_TOPIC_URL = 'https://news.hada.io/topic';
-  
   private readonly HEADERS = {
     'User-Agent':
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   };
+  public readonly sourceName = 'geeknews';
 
   private parser: Parser;
-  public readonly sourceName = 'geeknews';
 
   constructor() {
     this.parser = new Parser({
@@ -74,30 +73,17 @@ export class GeekNewsScraper implements IArticleScraper {
         headers: this.HEADERS,
         timeout: 5000,
       });
-
       if (!response.data) return null;
 
       const $ = cheerio.load(response.data);
 
-      // GeekNews 본문
       const content = $('.topic_contents, .topic_desc').text().trim();
-
-      if (!content) {
-        this.logger.warn(
-          `[Scraper:GeekNews] 본문 태그를 찾을 수 없음 | articleId=${articleId}`,
-        );
-        return null;
-      }
+      if (!content) return null;
 
       // 페이지 전체 텍스트에서 포인트/댓글 수 추출
       const pageText = $('body').text().replace(/\s+/g, ' ').trim();
-
       const points = this.extractPoints(pageText);
       const commentCount = this.extractCommentCount(pageText);
-
-      this.logger.log(
-        `[Scraper:GeekNews] 아티클 상세 수집 완료 | articleId=${articleId}, points=${points}, comments=${commentCount}`,
-      );
 
       return {
         content,
