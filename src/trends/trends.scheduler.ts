@@ -11,6 +11,6 @@ export class TrendsScheduler {
   @Cron('0 1 * * *', { name: 'devto-trends-collector', timeZone: 'Asia/Seoul' })
   async handleDailyTrendsCron() {
     this.logger.log('[Scheduler] 일일 트렌드 수집 크론 작업 개시');
-    await this.trendsPipelineService.collectAndProcessTrends();
+    await this.trendsPipelineService.mainProcess();
   }
 }

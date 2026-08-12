@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import Parser from 'rss-parser';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import { BaseArticle, IArticleScraper } from '../interfaces/scraper.interface';
+import { Article, ArticleDetails, IArticleScraper } from '../interfaces/scraper.interface';
 
 @Injectable()
 export class GeekNewsScraper implements IArticleScraper {
@@ -31,7 +31,7 @@ export class GeekNewsScraper implements IArticleScraper {
   }
 
   // 최신 아티클 목록 수집 (RSS 사용)
-  async getTrendingArticles(): Promise<BaseArticle[]> {
+  async getArticles(): Promise<Article[]> {
     try {
       this.logger.log(`[Scraper:GeekNews] 아티클 목록 수집 시작 | url=${this.GEEKNEWS_RSS_URL}`);
 
@@ -42,7 +42,7 @@ export class GeekNewsScraper implements IArticleScraper {
         return [];
       }
 
-      const articles: BaseArticle[] = feed.items.map((item) => {
+      const articles: Article[] = feed.items.map((item) => {
         const rawLink = item.link || item.id || '';
         const topicId = this.extractTopicId(rawLink);
         const pubDate = item.pubDate || item.isoDate || '';
@@ -65,8 +65,8 @@ export class GeekNewsScraper implements IArticleScraper {
     }
   }
 
-  // 게시글 ID의 본문 스크래핑 (HTML 파싱)
-  async getArticleContent(articleId: string): Promise<string | null> {
+  // 게시글 ID의 본문 및 통계 정보 수집
+  async getArticleDetails(articleId: string): Promise<ArticleDetails | null> {
     try {
       const targetUrl = `${this.GEEKNEWS_TOPIC_URL}?id=${articleId}`;
 
@@ -74,21 +74,53 @@ export class GeekNewsScraper implements IArticleScraper {
         headers: this.HEADERS,
         timeout: 5000,
       });
+
       if (!response.data) return null;
 
       const $ = cheerio.load(response.data);
-      const contentElement = $('.topic_contents, .topic_desc');
-      if (contentElement.length === 0) {
-        this.logger.warn(`[Scraper:GeekNews] 본문 태그를 찾을 수 없음 | articleId=${articleId}`);
+
+      // GeekNews 본문
+      const content = $('.topic_contents, .topic_desc').text().trim();
+
+      if (!content) {
+        this.logger.warn(
+          `[Scraper:GeekNews] 본문 태그를 찾을 수 없음 | articleId=${articleId}`,
+        );
         return null;
       }
 
-      const fullContent = contentElement.text().trim();
-      return fullContent || null;
+      // 페이지 전체 텍스트에서 포인트/댓글 수 추출
+      const pageText = $('body').text().replace(/\s+/g, ' ').trim();
 
+      const points = this.extractPoints(pageText);
+      const commentCount = this.extractCommentCount(pageText);
+
+      this.logger.log(
+        `[Scraper:GeekNews] 아티클 상세 수집 완료 | articleId=${articleId}, points=${points}, comments=${commentCount}`,
+      );
+
+      return {
+        content,
+        like_count: points,
+        comment_count: commentCount,
+      };
     } catch (error: any) {
-      this.logger.warn(`[Scraper:GeekNews] 아티클 본문 수집 실패 | articleId=${articleId}, error=${error.message}`);
+      this.logger.warn(
+        `[Scraper:GeekNews] 아티클 본문 수집 실패 | articleId=${articleId}, error=${error.message}`,
+      );
       return null;
     }
+  }
+
+  // 포인트 추출
+  private extractPoints(pageText: string): number {
+    const match = pageText.match(/(\d+)\s*P\s+by\s+GN\+?/i);
+    return match ? Number(match[1]) : 0;
+  }
+
+  // 댓글 수 추출
+  private extractCommentCount(pageText: string): number {
+    const match = pageText.match(/댓글\s*(\d+)\s*개/);
+    return match ? Number(match[1]) : 0;
   }
 }

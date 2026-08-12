@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
-import { BaseArticle, IArticleScraper } from '../interfaces/scraper.interface';
+import { Article, ArticleDetails, IArticleScraper } from '../interfaces/scraper.interface';
 
 @Injectable()
 export class DevToScraper implements IArticleScraper {
@@ -15,7 +15,7 @@ export class DevToScraper implements IArticleScraper {
   private readonly MIN_COMMENTS = 1;
 
   // DEV.to에서 1주일 트렌딩(인기) 글 목록 조회
-  async getTrendingArticles(): Promise<BaseArticle[]> {
+  async getArticles(): Promise<Article[]> {
     try {
       this.logger.log(`[Scraper:DevTo] 인기 아티클 목록 수집 시작 | minReactions=${this.MIN_REACTIONS}, minComments=${this.MIN_COMMENTS}`);
       
@@ -56,15 +56,23 @@ export class DevToScraper implements IArticleScraper {
   }
 
   // 게시글 ID의 본문 스크래핑
-  async getArticleContent(articleId: string): Promise<string | null> {
+  async getArticleDetails(articleId: string): Promise<ArticleDetails | null> {
     try {
       const response = await axios.get(`${this.DEVTO_API_URL}/${articleId}`, {
         headers: this.HEADERS,
         timeout: 5000,
       });
 
-      const body = response.data?.body_markdown?.trim();
-      return body || null;
+      const data = response.data;
+      const content = data?.body_markdown?.trim();
+      if (!content) return null;
+
+      return {
+        content,
+        view_count: null,
+        like_count: data.positive_reactions_count ?? null,
+        comment_count: data.comments_count ?? null,
+      };
 
     } catch (error: any) {
       this.logger.warn(`[Scraper:DevTo] 아티클 본문 수집 실패 | articleId=${articleId}, error=${error.message}`);

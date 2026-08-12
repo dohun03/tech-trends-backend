@@ -59,6 +59,9 @@ export class TechTrendRepository {
         'trend.long_summary',
         'trend.link_url',
         'trend.technical_tags',
+        'trend.view_count',
+        'trend.like_count',
+        'trend.comment_count',
         'trend.created_at',
         'trend.mined_at',
       ]);
@@ -110,6 +113,9 @@ export class TechTrendRepository {
         trend.long_summary,
         trend.link_url,
         trend.technical_tags,
+        trend.view_count,
+        trend.like_count,
+        trend.comment_count,
         trend.created_at,
         trend.mined_at,
         ts_rank(trend.search_document, plainto_tsquery('simple', $1)) AS relevance_score
@@ -201,9 +207,9 @@ export class TechTrendRepository {
             FROM keyword_ranked k
             FULL OUTER JOIN vector_ranked v ON k.id = v.id
           )
-      SELECT trend.id, trend.source, trend.title, trend.short_summary, trend.long_summary,
-            trend.link_url, trend.technical_tags, trend.created_at, trend.mined_at,
-            rrf.rrf_score
+      SELECT
+          trend.id, trend.source, trend.title, trend.short_summary, trend.long_summary, trend.link_url, trend.technical_tags, trend.view_count, trend.like_count, trend.comment_count, trend.created_at, trend.mined_at,
+          rrf.rrf_score
         FROM rrf
         JOIN tbl_tech_trends trend ON trend.id = rrf.id
       ORDER BY rrf.rrf_score DESC, trend.created_at DESC, trend.id DESC

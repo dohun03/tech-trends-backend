@@ -4,14 +4,14 @@ import { chunkArray } from '../common/utils/array.util';
 import { sanitizeAndFilter } from '../common/utils/text.util';
 import { delaySeconds } from '../common/utils/time.util';
 import { TechTrendRepository } from './repositories/tech-trend.repository';
-import { BaseArticle, IArticleScraper } from './interfaces/scraper.interface';
+import { Article, ArticleDetails, IArticleScraper } from './interfaces/scraper.interface';
 import { FinalSummaryResult } from 'ai/interfaces/ai.interface';
 import { DevToScraper } from './scrapers/devto.scraper';
 import { GeekNewsScraper } from './scrapers/geek-news.scraper';
 
-// 서비스 내부 전용 타입 정의 (외부 파일 분리 필요 없음)
 interface SummarizedArticle {
-  article: BaseArticle;
+  article: Article;
+  articleDetails: ArticleDetails;
   summary: FinalSummaryResult;
 }
 
@@ -19,29 +19,13 @@ interface EmbeddedArticle extends SummarizedArticle {
   embeddingVector: number[] | null;
 }
 
-interface ProcessBatchParams {
-  batch: BaseArticle[];
-  remainingQuota: number;
-  totalSavedCount: number;
-  scraper: IArticleScraper;
-}
-
-interface SummarizeArticlesParams {
-  articles: BaseArticle[];
-  articleContentMap: Map<string, string>;
-  remainingQuota: number;
-  totalSavedCount: number;
-}
-
 @Injectable()
 export class TrendsPipelineService {
   private readonly logger = new Logger(TrendsPipelineService.name);
-
-  private isProcessing = false;
-  private readonly TARGET_SAVE_COUNT = 10;
+  private readonly TARGET_SAVE_COUNT = 5;
   private readonly BATCH_SIZE = 10;
-
-  private scrapers: IArticleScraper[];
+  private isProcessing = false;
+  private readonly scrapers: IArticleScraper[];
 
   constructor(
     private readonly aiService: AiService,
@@ -49,247 +33,337 @@ export class TrendsPipelineService {
     private readonly devToScraper: DevToScraper,
     private readonly geekNewsScraper: GeekNewsScraper,
   ) {
-    // 스크래퍼 배열 등록
     this.scrapers = [this.devToScraper, this.geekNewsScraper];
   }
 
-  // [메인 파이프라인]
-  async collectAndProcessTrends() {
+  // 메인 파이프라인
+  async mainProcess(): Promise<void> {
     if (this.isProcessing) {
-      this.logger.warn('[Pipeline] 이미 데이터 수집 파이프라인이 실행 중입니다. 중복 실행을 스킵합니다.');
+      this.logger.warn('[Pipeline] 이미 실행 중인 파이프라인이 있어 중복 실행을 스킵합니다.');
       return;
     }
-    
+
     this.isProcessing = true;
 
-    // 스크래퍼별로 순회 실행
     try {
       for (const scraper of this.scrapers) {
         await this.processSource(scraper);
       }
     } catch (error: any) {
-      this.logger.error(`[Pipeline] 전체 파이프라인 처리 중 오류 발생 | error=${error.message}`, error.stack);
+      this.logger.error(`[Pipeline] 전체 처리 실패 | error=${error.message}`, error.stack);
     } finally {
       this.isProcessing = false;
-      this.logger.log(`[Pipeline] 모든 트렌드 수집 파이프라인 종료`);
+      this.logger.log('[Pipeline] 전체 트렌드 수집 종료');
     }
   }
 
-  // [개별 플랫폼 처리 로직]
-  private async processSource(scraper: IArticleScraper) {
+  // 스크래퍼 단위 처리
+  private async processSource(scraper: IArticleScraper): Promise<void> {
     let totalSavedCount = 0;
-    this.logger.log(`[Pipeline] ${scraper.sourceName} 트렌드 수집 시작 | targetCount=${this.TARGET_SAVE_COUNT}`);
+
+    this.logger.log(`[Pipeline] ${scraper.sourceName} 수집 시작 | target=${this.TARGET_SAVE_COUNT}`);
 
     try {
-      // 1. 외부 데이터 수집 (스크래퍼의 범용 메서드 호출)
-      const trendingArticles = await scraper.getTrendingArticles();
-
-      if (!trendingArticles || trendingArticles.length === 0) {
-        this.logger.warn(`[Pipeline] ${scraper.sourceName} - 조건을 만족하는 트렌딩 글이 없습니다. | action=terminate`);
+      // 외부 소스에서 아티클 목록 수집
+      const articles = await scraper.getArticles();
+      if (articles.length === 0) {
+        this.logger.warn(`[Pipeline] ${scraper.sourceName} 수집 결과 없음`);
         return;
       }
 
-      // 2. 내부 DB 중복 검증 (source 필드 활용)
-      const filteredArticles = await this.excludeExistingArticles(trendingArticles, scraper.sourceName);
-      if (filteredArticles.length === 0) {
-        this.logger.warn(`[Pipeline] ${scraper.sourceName} - 수집된 모든 글이 이미 DB에 존재합니다. | action=terminate`);
+      // 이미 DB에 존재하는 아티클 제거
+      const newArticles = await this.excludeExistingArticles(
+        articles,
+        scraper.sourceName,
+      );
+
+      if (newArticles.length === 0) {
+        this.logger.warn(`[Pipeline] ${scraper.sourceName} 신규 아티클 없음`);
         return;
       }
 
-      // 3. 배치 단위 프로세스 시작
-      const batches = chunkArray(filteredArticles, this.BATCH_SIZE);
+      // 배치 단위 처리
+      const batches = chunkArray(newArticles, this.BATCH_SIZE);
 
       for (const batch of batches) {
         if (totalSavedCount >= this.TARGET_SAVE_COUNT) {
-          this.logger.log(`[Pipeline] ${scraper.sourceName} - 목표 수량 달성 조기 종료 | target=${this.TARGET_SAVE_COUNT}, current=${totalSavedCount}`);
+          this.logger.log(`[Pipeline] ${scraper.sourceName} 목표 수량 달성 | saved=${totalSavedCount}`);
           break;
         }
 
         const remainingQuota = this.TARGET_SAVE_COUNT - totalSavedCount;
-        
-        const insertedCount = await this.processBatch({
-          batch,
-          remainingQuota,
-          totalSavedCount,
-          scraper
-        });
 
-        totalSavedCount += insertedCount;
+        const savedCount = await this.processBatch(
+          batch,
+          scraper,
+          remainingQuota,
+        );
+
+        totalSavedCount += savedCount;
       }
+
+      this.logger.log(`[Pipeline] ${scraper.sourceName} 처리 완료 | saved=${totalSavedCount}/${this.TARGET_SAVE_COUNT}`);
     } catch (error: any) {
-      this.logger.error(`[Pipeline] ${scraper.sourceName} 파이프라인 처리 중 오류 발생 | error=${error.message}`);
+      this.logger.error(`[Pipeline] ${scraper.sourceName} 처리 실패 | error=${error.message}`, error.stack);
     }
   }
 
-  // [배치 단위 파이프라인]
-  private async processBatch(params: ProcessBatchParams): Promise<number> {
-    const { batch, remainingQuota, totalSavedCount, scraper } = params;
+  // 배치 단위 처리
+  private async processBatch(
+    batch: Article[],
+    scraper: IArticleScraper,
+    limit: number,
+  ): Promise<number> {
+    // 본문 확보
+    const articleIds = batch.map((article) => String(article.id));
 
-    // 본문 스크래핑
-    const articleIds = batch.map((a) => a.id);
-    const articleContentMap = await this.fetchBatchContents(scraper, articleIds);
-    const validArticles = batch.filter((a) => articleContentMap.has(a.id));
+    const articleDetailsMap = await this.fetchBatchDetailsMap(
+      scraper,
+      articleIds,
+    );
+
+    const validArticles = batch.filter((article) =>
+      articleDetailsMap.has(String(article.id)),
+    );
+
     if (validArticles.length === 0) {
-      this.logger.warn(`[Pipeline] [${scraper.sourceName}] 배치 내 유효 본문 없음 스킵`);
+      this.logger.warn(`[Pipeline] [${scraper.sourceName}] 유효 본문 없음`);
       return 0;
     }
 
     // AI 가치 평가
-    const valuableIds = await this.evaluateArticlesWithAi(validArticles, articleContentMap);
-    const valuableArticles = validArticles.filter((a) => valuableIds.includes(a.id));
-    if (valuableArticles.length === 0) {
-      this.logger.warn(`[Pipeline] [${scraper.sourceName}] AI 가치 평가를 통과된 항목 없음 스킵 | action=skip`);
-      return 0;
-    }
-    
-    // AI 본문 요약
-    const summarizedArticles = await this.summarizeArticles({
-      articles: valuableArticles,
-      articleContentMap,
-      remainingQuota,
-      totalSavedCount,
+    const valuableArticles = await this.selectValuableArticles({
+      articles: validArticles,
+      articleDetailsMap,
     });
-    
-    if (summarizedArticles.length === 0) {
-      this.logger.warn(`[Pipeline] [${scraper.sourceName}] AI 요약된 항목 없음 스킵 | action=skip`);
+
+    if (valuableArticles.length === 0) {
+      this.logger.warn(`[Pipeline] [${scraper.sourceName}] 가치 평가 통과 아티클 없음`);
       return 0;
     }
 
-    // AI 벡터 임베딩 생성
-    const embeddedArticles = await this.generateEmbeddings(summarizedArticles);
+    // AI 요약
+    const summarizedArticles = await this.summarizeArticles({
+      articles: valuableArticles,
+      articleDetailsMap,
+      limit,
+    });
+
+    if (summarizedArticles.length === 0) {
+      this.logger.warn(`[Pipeline] [${scraper.sourceName}] 요약 완료 아티클 없음`);
+      return 0;
+    }
+
+    // AI 임베딩
+    const embeddedArticles = await this.generateEmbeddingsForArticles(summarizedArticles);
+
     if (embeddedArticles.length === 0) {
-      this.logger.warn(`[Pipeline] [${scraper.sourceName}] AI 임베딩 항목 없음 스킵 | action=skip`);
+      this.logger.warn(`[Pipeline] [${scraper.sourceName}] 임베딩 처리 결과 없음`);
       return 0;
     }
 
     // DB 저장
-    return await this.saveTrends(embeddedArticles);
+    return this.saveTrends(embeddedArticles);
   }
 
+  // [ 세부 기능 메서드 ]
 
+  // DB 중복 제거
+  private async excludeExistingArticles(
+    articles: Article[],
+    sourceName: string,
+  ): Promise<Article[]> {
+    const sourceIds = articles.map((article) =>
+      String(article.id),
+    );
 
-  // [ === 하위 세부 기능 메서드 모음 === ]
+    const existingIds =
+      await this.techTrendRepository.findExistingSourceIds(
+        sourceName,
+        sourceIds,
+      );
 
-  // DB 중복 필터링
-  private async excludeExistingArticles(articles: BaseArticle[], sourceName: string): Promise<BaseArticle[]> {
-    const sourceIds = articles.map((a) => String(a.id));
-    const existingSet = await this.techTrendRepository.findExistingSourceIds(sourceName, sourceIds);
-    const filtered = articles.filter((a) => !existingSet.has(String(a.id)));
-    
-    this.logger.log(`[Pipeline] DB 중복 검증 완료 | source=${sourceName}, raw=${articles.length}, new=${filtered.length}`);
+    const newArticles = articles.filter(
+      (article) => !existingIds.has(String(article.id)),
+    );
 
-    return filtered;
+    this.logger.log(`[Pipeline] 중복 검증 완료 | source=${sourceName}, raw=${articles.length}, new=${newArticles.length}`);
+
+    return newArticles;
   }
 
-  // 본문 병렬 스크래핑
-  private async fetchBatchContents(scraper: IArticleScraper, articleIds: string[]): Promise<Map<string, string>> {
-    this.logger.log(`[Scraper:${scraper.sourceName}] 본문 병렬 스크래핑 시작 | idsCount=${articleIds.length}`);
-    
-    const articleContentMap = new Map<string, string>();
+  // 배치 내 아티클 본문을 병렬로 수집
+  private async fetchBatchDetailsMap(
+    scraper: IArticleScraper,
+    articleIds: string[],
+  ): Promise<Map<string, ArticleDetails>> {
+    const results = await Promise.allSettled(
+      articleIds.map(async (id) => ({
+        id,
+        details: await scraper.getArticleDetails(id),
+      })),
+    );
 
-    const promises = articleIds.map(async (id) => {
-      const content = await scraper.getArticleContent(id);
-      return { id, content };
-    });
+    const articleDetailsMap = new Map<
+      string,
+      ArticleDetails
+    >();
 
-    const results = await Promise.allSettled(promises);
     results.forEach((result) => {
-      if (result.status === 'fulfilled' && result.value.content) {
-        articleContentMap.set(result.value.id, result.value.content);
+      if (result.status !== 'fulfilled') {
+        return;
+      }
+
+      const { id, details } = result.value;
+
+      if (details?.content) {
+        articleDetailsMap.set(id, details);
       }
     });
 
-    this.logger.log(`[Scraper:${scraper.sourceName}] 본문 병렬 스크래핑 완료 | successCount=${articleContentMap.size}`);
-
-    return articleContentMap;
+    return articleDetailsMap;
   }
 
-  // AI 가치 평가
-  private async evaluateArticlesWithAi(articles: BaseArticle[], articleContentMap: Map<string, string>): Promise<string[]> {
-    const batchPayload = articles.map((a) => ({
-      id: a.id,
-      title: a.title,
-      snippet: sanitizeAndFilter(articleContentMap.get(a.id) || '', 800),
+  // AI로 가치 있는 아티클만 선별
+  private async selectValuableArticles({
+    articles,
+    articleDetailsMap,
+  }: {
+    articles: Article[];
+    articleDetailsMap: Map<string, ArticleDetails>;
+  }): Promise<Article[]> {
+    
+    const items = articles.map((article) => ({
+      id: String(article.id),
+      title: article.title,
+      snippet: sanitizeAndFilter(
+        articleDetailsMap.get(String(article.id))?.content ?? '',
+        600,
+      ),
     }));
 
-    const valuableIds = await this.aiService.filterBatchWithAi({ items: batchPayload });
-    this.logger.log(`[Pipeline] AI 가치 평가 완료 | valid=${articles.length}, selected=${valuableIds.length}`);
-    
-    return valuableIds.map(String);
+    const valuableIds = new Set((
+      await this.aiService.filterBatchWithAi({ items })).map(String)
+    );
+
+    const valuableArticles = articles.filter((article) =>
+      valuableIds.has(String(article.id)),
+    );
+
+    this.logger.log(`[Pipeline] AI 가치 평가 완료 | input=${articles.length}, selected=${valuableArticles.length}`);
+
+    return valuableArticles;
   }
 
-  // AI 요약
-  private async summarizeArticles(params: SummarizeArticlesParams): Promise<SummarizedArticle[]> {
-    const { articles, articleContentMap, remainingQuota, totalSavedCount } = params;
-    const summaryResults: SummarizedArticle[] = [];
+  // 아티클을 순차적으로 요약
+  private async summarizeArticles({
+    articles,
+    articleDetailsMap,
+    limit,
+  }: {
+    articles: Article[];
+    articleDetailsMap: Map<string, ArticleDetails>;
+    limit: number;
+  }): Promise<SummarizedArticle[]> {
+    const summarizedArticles: SummarizedArticle[] = [];
 
     for (const article of articles) {
-      if (summaryResults.length >= remainingQuota) break;
+      if (summarizedArticles.length >= limit) {
+        break;
+      }
 
-      const content = articleContentMap.get(article.id);
-      if (!content) continue;
+      const details = articleDetailsMap.get(
+        String(article.id),
+      );
 
-      const cleanContent = sanitizeAndFilter(content, 5000);
+      if (!details?.content) {
+        continue;
+      }
 
       try {
-        const summary = await this.aiService.summarizeContentWithAi({
-          title: article.title,
-          content: cleanContent,
-        });
-        
+        const summary =
+          await this.aiService.summarizeContentWithAi({
+            title: article.title,
+            content: sanitizeAndFilter(
+              details.content,
+              5000,
+            ),
+          });
+
         if (!summary) {
-          this.logger.warn(`[Pipeline] 요약 내용이 없음 | articleId=${article.id}, action=skip`);
+          this.logger.warn(`[Pipeline] 요약 결과 없음 | articleId=${article.id}`);
           continue;
         }
 
-        summaryResults.push({
+        summarizedArticles.push({
           article,
+          articleDetails: details,
           summary,
         });
 
-        const progress = totalSavedCount + summaryResults.length;
-        this.logger.log(`[Pipeline] 아티클 요약 완료 | progress=${progress}/${this.TARGET_SAVE_COUNT}, articleId=${article.id}`);
+        this.logger.log(`[Pipeline] 요약 완료 | articleId=${article.id}`);
 
+        // AI API 호출 간격
         await delaySeconds(3);
-
       } catch (error: any) {
-        this.logger.error(`[Pipeline] 요약 중 에러 발생 스킵 | articleId=${article.id}, error=${error.message}`);
+        // 개별 아티클 요약 실패는 다음 아티클로 진행
+        this.logger.error(`[Pipeline] 요약 실패 | articleId=${article.id}, error=${error.message}`, error.stack);
       }
     }
 
-    return summaryResults;
+    return summarizedArticles;
   }
 
-  // AI 벡터 임베딩 생성
-  private async generateEmbeddings(articles: SummarizedArticle[]): Promise<EmbeddedArticle[]> {
+  // 요약 결과를 임베딩 벡터로 변환
+  private async generateEmbeddingsForArticles(articles: SummarizedArticle[]): Promise<EmbeddedArticle[]> {
+    this.logger.log(`[Pipeline] 임베딩 생성 시작 | count=${articles.length}`);
+
+    const embeddingTexts = articles.map((article) =>
+      this.buildEmbeddingText(article.summary)
+    );
+
     try {
-      this.logger.log(`[Pipeline] 임베딩 생성 시작 | count=${articles.length}`);
-      
-      const embeddingTexts = articles.map((a) => this.buildEmbeddingText(a.summary));
-      const embeddingVectors = await this.aiService.vectorEmbeddingWithAi({
-        texts: embeddingTexts,
-        taskType: 'RETRIEVAL_DOCUMENT'
-      });
+      const embeddingVectors =
+        await this.aiService.vectorEmbeddingWithAi({
+          texts: embeddingTexts,
+          taskType: 'RETRIEVAL_DOCUMENT',
+        });
 
       return articles.map((article, index) => ({
         ...article,
-        embeddingVector: embeddingVectors[index] || null,
+        embeddingVector: embeddingVectors[index] ?? null,
       }));
     } catch (error: any) {
-      this.logger.error(`[Pipeline] 임베딩 생성 중 오류 발생 | error=${error.message}`);
-      return [];
+      this.logger.error(`[Pipeline] 임베딩 생성 실패 | error=${error.message}`, error.stack);
+
+      // 임베딩이 없어도 아티클 저장은 계속 진행
+      return articles.map((article) => ({
+        ...article,
+        embeddingVector: null,
+      }));
     }
   }
 
-  // 포맷팅 전용 메서드
+  // 임베딩 생성용 텍스트 구성
   private buildEmbeddingText(summary: FinalSummaryResult): string {
-    const tagsStr = summary.tags || '';
-    const shortSummaryStr = Array.isArray(summary.short_summary) 
-      ? summary.short_summary.join(' ') 
-      : '';
-    const longSummaryStr = summary.long_summary || '';
+    const tags = Array.isArray(summary.tags)
+      ? summary.tags.join(', ')
+      : summary.tags ?? '';
 
-    return `[제목]: ${summary.title}\n[태그]: ${tagsStr}\n[요약]: ${shortSummaryStr}\n[상세]: ${longSummaryStr}`;
+    const shortSummary = Array.isArray(
+      summary.short_summary,
+    )
+      ? summary.short_summary.join(' ')
+      : summary.short_summary ?? '';
+
+    const longSummary = summary.long_summary ?? '';
+
+    return [
+      `[제목]: ${summary.title}`,
+      `[태그]: ${tags}`,
+      `[요약]: ${shortSummary}`,
+      `[상세]: ${longSummary}`,
+    ].join('\n');
   }
 
   // DB 저장
@@ -299,7 +373,7 @@ export class TrendsPipelineService {
     for (const item of articles) {
       try {
         await this.techTrendRepository.saveTrend({
-          source: item.article.source, // 각 플랫폼의 동적 Source 할당
+          source: item.article.source,
           source_id: String(item.article.id),
           title: item.summary.title,
           short_summary: item.summary.short_summary,
@@ -307,18 +381,22 @@ export class TrendsPipelineService {
           link_url: item.article.url,
           technical_tags: item.summary.tags,
           embedding: item.embeddingVector,
+          view_count: item.articleDetails.view_count ?? null,
+          like_count: item.articleDetails.like_count ?? null,
+          comment_count: item.articleDetails.comment_count ?? null,
           created_at: new Date(item.article.created_at),
         });
 
         savedCount++;
       } catch (error: any) {
         this.logger.error(
-          `[Pipeline] 개별 아티클 DB 저장 실패 | source=${item.article.source}, articleId=${item.article.id}, error=${error.message}`,
+          `[Pipeline] DB 저장 실패 | source=${item.article.source}, articleId=${item.article.id}, error=${error.message}`,
+          error.stack,
         );
       }
     }
 
-    this.logger.log(`[Pipeline] DB 저장 완료 | insertCount=${savedCount}/${articles.length}`);
+    this.logger.log(`[Pipeline] DB 저장 완료 | saved=${savedCount}/${articles.length}`);
 
     return savedCount;
   }

@@ -1,9 +1,16 @@
-export interface BaseArticle {
+export interface Article {
   id: string;
   title: string;
   url: string;
   created_at: string | Date;
   source: string;
+}
+
+export interface ArticleDetails {
+  content: string;
+  view_count?: number | null;
+  like_count?: number | null;
+  comment_count?: number | null;
 }
 
 export interface ScraperOptions {
@@ -13,6 +20,6 @@ export interface ScraperOptions {
 
 export interface IArticleScraper {
   readonly sourceName: string;
-  getTrendingArticles(options?: ScraperOptions): Promise<BaseArticle[]>;
-  getArticleContent(articleId: string): Promise<string | null>;
+  getArticles(options?: ScraperOptions): Promise<Article[]>;
+  getArticleDetails(articleId: string): Promise<ArticleDetails | null>;
 }
