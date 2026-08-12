@@ -8,6 +8,8 @@ import {
   SummarizeContentParams,
   VectorEmbeddingParams,
 } from './interfaces/ai.interface';
+import { RedisService } from 'redis/redis.service';
+import { ConfigService } from '@nestjs/config';
 
 interface ExecuteWithRetryParams<T> {
   operation: () => Promise<T>;
@@ -22,14 +24,25 @@ export class AiService {
 
   private groq: Groq;
   private gemini: GoogleGenAI;
+  
+  private readonly groqModelName: string;
+  private readonly embeddingModelName: string;
+  private readonly embeddingTtlSeconds: number;
 
-  constructor() {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly redisService: RedisService,
+  ) {
+    this.groqModelName = this.configService.getOrThrow('GROQ_MODEL');
+    this.embeddingModelName = this.configService.getOrThrow('GEMINI_EMBEDDING_MODEL');
+    this.embeddingTtlSeconds = Number(this.configService.get('EMBEDDING_TTL_SECONDS')) || 2592000;
+
     this.groq = new Groq({
-      apiKey: process.env.GROQ_API_KEY,
+      apiKey: this.configService.get<string>('GROQ_API_KEY'),
     });
 
     this.gemini = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
+      apiKey: this.configService.get<string>('GEMINI_API_KEY'),
     });
   }
 
@@ -85,7 +98,7 @@ export class AiService {
       const parsed = await this.executeWithRetry({
         operation: async () => {
           const response = await this.groq.chat.completions.create({
-            model: 'qwen/qwen3.6-27b',
+            model: this.groqModelName,
             messages: [{ role: 'user', content: prompt }],
             response_format: { type: 'json_object' },
             temperature: 0.1,
@@ -139,7 +152,7 @@ export class AiService {
       const parsed = await this.executeWithRetry({
         operation: async () => {
           const response = await this.groq.chat.completions.create({
-            model: 'qwen/qwen3.6-27b',
+            model: this.groqModelName,
             messages: [{ role: 'user', content: prompt }],
             response_format: { type: 'json_object' },
             temperature: 0.2,
@@ -182,7 +195,7 @@ export class AiService {
       const embeddings = await this.executeWithRetry({
         operation: async () => {
           const response = await this.gemini.models.embedContent({
-            model: 'gemini-embedding-001',
+            model: this.embeddingModelName,
             contents: texts,
             config: {
               outputDimensionality: 1536,
@@ -209,13 +222,44 @@ export class AiService {
 
   // GEMINI AI 벡터 임베딩 (검색 기능)
   async embedSearchQuery(query: string): Promise<number[] | null> {
-    if (!query) return null;
+    if (!query || !query.trim()) return null;
 
-    const vectors = await this.vectorEmbeddingWithAi({
-      texts: [query],
-      taskType: 'RETRIEVAL_QUERY',
-    });
+    const normalizedQuery = this.normalizeKeyword(query);
+    const cacheKey = `emb:${this.embeddingModelName}:${normalizedQuery}`;
 
-    return vectors.length > 0 && vectors[0].length > 0 ? vectors[0] : null;
+    try {
+      const cachedVector = await this.redisService.getCache<number[]>({ key: cacheKey });
+      if (cachedVector && Array.isArray(cachedVector) && cachedVector.length > 0) {
+        return cachedVector;
+      }
+
+      const vectors = await this.vectorEmbeddingWithAi({
+        texts: [normalizedQuery],
+        taskType: 'RETRIEVAL_QUERY',
+      });
+
+      const vector = vectors.length > 0 && vectors[0].length > 0 ? vectors[0] : null;
+
+      if (vector) {
+        await this.redisService.setCache({
+          key: cacheKey,
+          value: vector,
+          ttlSeconds: this.embeddingTtlSeconds,
+        });
+      }
+
+      return vector;
+    } catch (error: any) {
+      this.logger.error(`[embedSearchQuery] 처리 중 에러 발생: ${error.message}`);
+      return null;
+    }
+  }
+
+  // 검색 키워드 정규화
+  private normalizeKeyword(keyword: string): string {
+    return keyword
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
   }
 }
