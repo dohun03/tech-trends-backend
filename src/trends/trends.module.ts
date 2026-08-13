@@ -10,11 +10,13 @@ import { TechTrendRepository } from './repositories/tech-trend.repository';
 import { DevToScraper } from './scrapers/devto.scraper';
 import { GeekNewsScraper } from './scrapers/geek-news.scraper';
 import { StackOverflowScraper } from './scrapers/stackoverflow.scraper';
+import { RedisModule } from 'redis/redis.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([TechTrend]),
     AiModule,
+    RedisModule,
   ],
   controllers: [TrendsController],
   providers: [

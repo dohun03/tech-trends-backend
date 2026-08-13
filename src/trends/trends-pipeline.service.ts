@@ -9,6 +9,7 @@ import { FinalSummaryResult } from 'ai/interfaces/ai.interface';
 import { DevToScraper } from './scrapers/devto.scraper';
 import { GeekNewsScraper } from './scrapers/geek-news.scraper';
 import { StackOverflowScraper } from './scrapers/stackoverflow.scraper';
+import { RedisService } from 'redis/redis.service';
 
 interface SummarizedArticle {
   article: Article;
@@ -25,12 +26,12 @@ export class TrendsPipelineService {
   private readonly logger = new Logger(TrendsPipelineService.name);
   private readonly TARGET_SAVE_COUNT = 5;
   private readonly BATCH_SIZE = 10;
-  private isProcessing = false;
   private readonly scrapers: IArticleScraper[];
 
   constructor(
     private readonly aiService: AiService,
     private readonly techTrendRepository: TechTrendRepository,
+    private readonly redisService: RedisService,
     private readonly devToScraper: DevToScraper,
     private readonly geekNewsScraper: GeekNewsScraper,
     private readonly stackOverflowScraper: StackOverflowScraper,
@@ -44,12 +45,19 @@ export class TrendsPipelineService {
 
   // 메인 파이프라인
   async mainProcess(): Promise<void> {
-    if (this.isProcessing) {
+    // 분산 락 생성/체크
+    const lockKey = 'lock:pipeline:main';
+    const lockTtlMs = 15 * 60 * 1000; // 15분
+
+    const isAcquired = await this.redisService.acquireLock({
+      key: lockKey,
+      ttlMs: lockTtlMs,
+    });
+
+    if (!isAcquired) {
       this.logger.warn('[Pipeline] 이미 실행 중인 파이프라인이 있어 중복 실행을 스킵합니다.');
       return;
     }
-
-    this.isProcessing = true;
 
     try {
       for (const scraper of this.scrapers) {
@@ -58,7 +66,7 @@ export class TrendsPipelineService {
     } catch (error: any) {
       this.logger.error(`[Pipeline] 전체 처리 실패 | error=${error.message}`, error.stack);
     } finally {
-      this.isProcessing = false;
+      await this.redisService.releaseLock({ key: lockKey });
       this.logger.log('[Pipeline] 전체 트렌드 수집 종료');
     }
   }
