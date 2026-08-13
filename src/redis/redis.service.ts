@@ -2,6 +2,11 @@ import { Injectable, OnModuleDestroy, OnModuleInit, Logger } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 
+export interface LockParams {
+  key: string;
+  ttlMs?: number;
+}
+
 export interface GetCacheParams {
   key: string;
 }
@@ -43,7 +48,22 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     this.client.disconnect();
   }
 
-  // Redis에서 캐시 데이터를 조회합니다.
+
+  // 분산락을 획득합니다
+  async acquireLock(params: LockParams): Promise<boolean> {
+    const { key, ttlMs = 5000 } = params;
+    const result = await this.client.set(key, 'locked', 'PX', ttlMs, 'NX');
+    return result === 'OK';
+  }
+
+  // 분산락을 해제합니다.
+  async releaseLock(params: LockParams): Promise<void> {
+    const { key } = params;
+    await this.client.del(key);
+  }
+
+
+  // 캐시 데이터를 조회합니다.
   async getCache<T>(params: GetCacheParams): Promise<T | null> {
     const { key } = params;
     const data = await this.client.get(key);
@@ -56,7 +76,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  // Redis에 데이터를 캐싱합니다.
+  // 데이터를 캐싱합니다.
   async setCache(params: SetCacheParams): Promise<void> {
     const { key, value, ttlSeconds = 2592000 } = params;
     const serialized = typeof value === 'string' ? value : JSON.stringify(value);
@@ -68,7 +88,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  // Redis에서 특정 캐시 키를 삭제합니다.
+  // 특정 캐시 키를 삭제합니다.
   async delCache(params: DelCacheParams): Promise<void> {
     const { key } = params;
     await this.client.del(key);

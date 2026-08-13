@@ -18,6 +18,12 @@ interface ExecuteWithRetryParams<T> {
   baseDelayMs?: number;
 }
 
+interface WaitForCacheParams {
+  cacheKey: string;
+  maxRetries?: number;
+  delayMs?: number;
+}
+
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
@@ -226,29 +232,50 @@ export class AiService {
 
     const normalizedQuery = this.normalizeKeyword(query);
     const cacheKey = `emb:${this.embeddingModelName}:${normalizedQuery}`;
+    const lockKey = `lock:${cacheKey}`;
 
     try {
+      // Redis 캐시 확인
       const cachedVector = await this.redisService.getCache<number[]>({ key: cacheKey });
       if (cachedVector && Array.isArray(cachedVector) && cachedVector.length > 0) {
-        return cachedVector;
+        this.logger.log(`[Embedding Cache HIT] key="${cacheKey}"`);
+        return cachedVector; // 캐시값 바로 리턴
       }
 
-      const vectors = await this.vectorEmbeddingWithAi({
-        texts: [normalizedQuery],
-        taskType: 'RETRIEVAL_QUERY',
+      const isLocked = await this.redisService.acquireLock({
+        key: lockKey,
+        ttlMs: 10000,
       });
 
-      const vector = vectors.length > 0 && vectors[0].length > 0 ? vectors[0] : null;
-
-      if (vector) {
-        await this.redisService.setCache({
-          key: cacheKey,
-          value: vector,
-          ttlSeconds: this.embeddingTtlSeconds,
-        });
+      // 락 획득 실패
+      if (!isLocked) {
+        this.logger.log(`[Embedding Lock Waiting] 다른 요청이 캐시 생성 중입니다. key="${cacheKey}"`);
+        return await this.waitForCache({ cacheKey });
       }
 
-      return vector;
+      // 락 획득 성공
+      try {
+        this.logger.log(`[Embedding Cache MISS] API 호출 진행 (락 선점) key="${cacheKey}"`);
+        const vectors = await this.vectorEmbeddingWithAi({
+          texts: [normalizedQuery],
+          taskType: 'RETRIEVAL_QUERY',
+        });
+
+        const vector = vectors.length > 0 && vectors[0].length > 0 ? vectors[0] : null;
+
+        if (vector) {
+          await this.redisService.setCache({
+            key: cacheKey,
+            value: vector,
+            ttlSeconds: this.embeddingTtlSeconds,
+          });
+        }
+
+        return vector;
+      } finally {
+        // 캐싱 완료 후 락 해제
+        await this.redisService.releaseLock({ key: lockKey });
+      }
     } catch (error: any) {
       this.logger.error(`[embedSearchQuery] 처리 중 에러 발생: ${error.message}`);
       return null;
@@ -261,5 +288,23 @@ export class AiService {
       .trim()
       .toLowerCase()
       .replace(/\s+/g, ' ');
+  }
+
+  // 검색 중복 요청시 대기
+  private async waitForCache(params: WaitForCacheParams): Promise<number[] | null> {
+    const { cacheKey, maxRetries = 10, delayMs = 150 } = params;
+
+    for (let i = 0; i < maxRetries; i++) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+      const cachedVector = await this.redisService.getCache<number[]>({ key: cacheKey });
+      if (cachedVector && Array.isArray(cachedVector) && cachedVector.length > 0) {
+        this.logger.log(`[Embedding Lock Resolved] 대기 후 캐시 획득 성공! key="${cacheKey}"`);
+        return cachedVector;
+      }
+    }
+
+    this.logger.warn(`[Embedding Lock Timeout] 대기 시간 초과. fallback 처리 key="${cacheKey}"`);
+    return null;
   }
 }
