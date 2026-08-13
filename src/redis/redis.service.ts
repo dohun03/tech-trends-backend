@@ -1,5 +1,6 @@
 import { Injectable, OnModuleDestroy, OnModuleInit, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
 import Redis from 'ioredis';
 
 export interface LockParams {
@@ -50,16 +51,28 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
 
   // 분산락을 획득합니다
-  async acquireLock(params: LockParams): Promise<boolean> {
-    const { key, ttlMs = 5000 } = params;
-    const result = await this.client.set(key, 'locked', 'PX', ttlMs, 'NX');
-    return result === 'OK';
+  async acquireLock(params: { key: string; ttlMs: number }): Promise<string | null> {
+    const { key, ttlMs } = params;
+    const lockValue = randomUUID();
+
+    const result = await this.client.set(key, lockValue, 'PX', ttlMs, 'NX');
+    return result === 'OK' ? lockValue : null;
   }
 
   // 분산락을 해제합니다.
-  async releaseLock(params: LockParams): Promise<void> {
-    const { key } = params;
-    await this.client.del(key);
+  async releaseLock(params: { key: string; value: string }): Promise<boolean> {
+    const { key, value } = params;
+
+    const luaScript = `
+      if redis.call("get", KEYS[1]) == ARGV[1] then
+        return redis.call("del", KEYS[1])
+      else
+        return 0
+      end
+    `;
+
+    const result = await this.client.eval(luaScript, 1, key, value);
+    return result === 1;
   }
 
 

@@ -242,13 +242,13 @@ export class AiService {
         return cachedVector; // 캐시값 바로 리턴
       }
 
-      const isLocked = await this.redisService.acquireLock({
+      // 락 획득 시도 (UUID 토큰 획득)
+      const lockValue = await this.redisService.acquireLock({
         key: lockKey,
-        ttlMs: 10000,
+        ttlMs: 10000, // 10초
       });
 
-      // 락 획득 실패
-      if (!isLocked) {
+      if (!lockValue) {
         this.logger.log(`[Embedding Lock Waiting] 다른 요청이 캐시 생성 중입니다. key="${cacheKey}"`);
         return await this.waitForCache({ cacheKey });
       }
@@ -274,7 +274,10 @@ export class AiService {
         return vector;
       } finally {
         // 캐싱 완료 후 락 해제
-        await this.redisService.releaseLock({ key: lockKey });
+        await this.redisService.releaseLock({
+          key: lockKey,
+          value: lockValue,
+        });
       }
     } catch (error: any) {
       this.logger.error(`[embedSearchQuery] 처리 중 에러 발생: ${error.message}`);
