@@ -25,7 +25,7 @@ export class TrendsController {
   // 스크래핑 테스트용 엔드포인트
   @Get('test-scraping')
   async runScrapingTest() {
-    await this.trendsPipelineService.mainProcess();
+    await this.trendsPipelineService.dispatchAllScrapersToQueue();
 
     return {
       success: true,

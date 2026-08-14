@@ -11,10 +11,15 @@ import { DevToScraper } from './scrapers/devto.scraper';
 import { GeekNewsScraper } from './scrapers/geek-news.scraper';
 import { StackOverflowScraper } from './scrapers/stackoverflow.scraper';
 import { RedisModule } from 'redis/redis.module';
+import { BullModule } from '@nestjs/bullmq';
+import { TrendsWorker } from './trends.worker';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([TechTrend]),
+    BullModule.registerQueue({
+      name: 'trend-scraper-queue',
+    }),
     AiModule,
     RedisModule,
   ],
@@ -23,6 +28,7 @@ import { RedisModule } from 'redis/redis.module';
     TechTrendRepository,
     TrendsQueryService,
     TrendsPipelineService,
+    TrendsWorker,
     TrendsScheduler,
     DevToScraper,
     GeekNewsScraper,

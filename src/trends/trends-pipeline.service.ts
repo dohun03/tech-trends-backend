@@ -9,7 +9,8 @@ import { FinalSummaryResult } from 'ai/interfaces/ai.interface';
 import { DevToScraper } from './scrapers/devto.scraper';
 import { GeekNewsScraper } from './scrapers/geek-news.scraper';
 import { StackOverflowScraper } from './scrapers/stackoverflow.scraper';
-import { RedisService } from 'redis/redis.service';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 
 interface SummarizedArticle {
   article: Article;
@@ -26,52 +27,62 @@ export class TrendsPipelineService {
   private readonly logger = new Logger(TrendsPipelineService.name);
   private readonly TARGET_SAVE_COUNT = 5;
   private readonly BATCH_SIZE = 10;
-  private readonly scrapers: IArticleScraper[];
+
+  private readonly scraperMap: Map<string, IArticleScraper>;
 
   constructor(
+    @InjectQueue('trend-scraper-queue')
+    private readonly scraperQueue: Queue,
     private readonly aiService: AiService,
     private readonly techTrendRepository: TechTrendRepository,
-    private readonly redisService: RedisService,
     private readonly devToScraper: DevToScraper,
     private readonly geekNewsScraper: GeekNewsScraper,
     private readonly stackOverflowScraper: StackOverflowScraper,
   ) {
-    this.scrapers = [
-      this.devToScraper,
-      this.geekNewsScraper,
-      this.stackOverflowScraper,
-    ];
+    this.scraperMap = new Map<string, IArticleScraper>([
+      [this.devToScraper.sourceName, this.devToScraper],
+      [this.geekNewsScraper.sourceName, this.geekNewsScraper],
+      [this.stackOverflowScraper.sourceName, this.stackOverflowScraper],
+    ]);
   }
 
-  // 메인 파이프라인
-  async mainProcess(): Promise<void> {
-    // 분산 락 생성/체크
-    const lockKey = 'lock:pipeline:main';
-    const lockTtlMs = 15 * 60 * 1000; // 15분
+  // 스크래들을 큐에 등록
+  public async dispatchAllScrapersToQueue(): Promise<void> {
+    for (const sourceName of this.scraperMap.keys()) {
+      const activeJobs = await this.scraperQueue.getJobs(['active', 'waiting', 'delayed']);
 
-    const lockValue = await this.redisService.acquireLock({
-      key: lockKey,
-      ttlMs: lockTtlMs,
-    });
+      const isRunning = activeJobs.some((job) => job.data.sourceName === sourceName);
 
-    if (!lockValue) {
-      this.logger.warn('[Pipeline] 이미 실행 중인 파이프라인이 있어 스킵합니다.');
-      return;
-    }
-
-    try {
-      for (const scraper of this.scrapers) {
-        await this.processSource(scraper);
+      if (isRunning) {
+        this.logger.warn(`[Queue] ${sourceName} 작업이 이미 진행 중이므로 새 요청을 무시합니다.`);
+        continue;
       }
-    } catch (error: any) {
-      this.logger.error(`[Pipeline] 전체 처리 실패 | error=${error.message}`, error.stack);
-    } finally {
-      await this.redisService.releaseLock({
-        key: lockKey,
-        value: lockValue,
-      });
-      this.logger.log('[Pipeline] 전체 파이프라인 종료 (Lock 안전 해제 완료)');
+
+      const jobId = `${sourceName}-${Date.now()}`;
+      await this.scraperQueue.add(
+        'scrape-articles',
+        { sourceName },
+        {
+          jobId,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+          removeOnComplete: 10, // 💡 완료된 작업 이력은 최근 10개까지 남겨둠
+          removeOnFail: 50,
+        }
+      );
+      this.logger.log(`[Queue] ${sourceName} 작업 등록 완료 (jobId: ${jobId})`);
     }
+  }
+
+  // Worker가 큐에서 작업을 꺼내어 실행할 때 호출
+  public async executeScraperByName(sourceName: string): Promise<void> {
+    const scraper = this.scraperMap.get(sourceName);
+    if (!scraper) {
+      throw new Error(`[Pipeline] 등록되지 않은 스크래퍼 소스입니다: ${sourceName}`);
+    }
+
+    this.logger.log(`[Pipeline] ${sourceName} 스크래핑 파이프라인 시작`);
+    await this.processSource(scraper);
   }
 
   // 스크래퍼 단위 처리
