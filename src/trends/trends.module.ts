@@ -13,10 +13,21 @@ import { StackOverflowScraper } from './scrapers/stackoverflow.scraper';
 import { RedisModule } from 'redis/redis.module';
 import { BullModule } from '@nestjs/bullmq';
 import { TrendsWorker } from './trends.worker';
+import { BullBoardModule } from '@bull-board/nestjs';
+import { ExpressAdapter } from '@bull-board/express';
+import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([TechTrend]),
+    BullBoardModule.forRoot({
+      route: '/admin/queues',
+      adapter: ExpressAdapter,
+    }),
+    BullBoardModule.forFeature({
+      name: 'trend-scraper-queue',
+      adapter: BullMQAdapter,
+    }),
     BullModule.registerQueue({
       name: 'trend-scraper-queue',
     }),
