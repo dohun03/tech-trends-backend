@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Param, Query, ParseIntPipe } from '@nestjs/common';
 import { TrendsPipelineService } from './trends-pipeline.service';
 import { TrendsQueryService } from './trends-query.service';
 import { GetTrendsQueryDto } from './dto/get-trends-query.dto';
@@ -20,6 +20,12 @@ export class TrendsController {
   @Get('trends/sources')
   async getSources() {
     return this.trendsQueryService.getUniqueSources();
+  }
+
+  // 단일 아티클 조회
+  @Get('trends/:id')
+  getTrendById(@Param('id') id: number) {
+    return this.trendsQueryService.getTrendById(id);
   }
 
   // 스크래핑 테스트용 엔드포인트

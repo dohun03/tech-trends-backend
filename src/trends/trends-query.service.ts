@@ -1,4 +1,4 @@
-import { Injectable, Logger, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, Logger, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { AiService } from 'ai/ai.service';
 import { GetTrendsQueryDto } from './dto/get-trends-query.dto';
 import { TechTrendRepository } from './repositories/tech-trend.repository';
@@ -101,6 +101,21 @@ export class TrendsQueryService {
     } catch (error) {
       this.logger.error(`[getUniqueSources] 소스 목록 조회 에러: ${error}`);
       throw new InternalServerErrorException('출처 목록을 불러오지 못했습니다.');
+    }
+  }
+
+  async getTrendById(id: number) {
+    try {
+      const article = await this.techTrendRepository.findById(id);
+      
+      if (!article) {
+        throw new NotFoundException(`ID가 ${id}인 아티클을 찾을 수 없습니다.`);
+      }
+      return article;
+
+    } catch (error) {
+      this.logger.error(`[getTrendById] 단건 조회 에러 (ID: ${id}): ${error}`);
+      throw new InternalServerErrorException('아티클 상세 정보를 불러오는 중 에러가 발생했습니다.');
     }
   }
 }

@@ -44,6 +44,12 @@ export class TechTrendRepository {
     return rows.map((row) => row.source).filter(Boolean);
   }
 
+  // 특정 아티클 단일 조회
+  async findById(id: number): Promise<TechTrend | null> {
+    return await this.repository.findOneBy({ id });
+  }
+
+
   // 기본 목록 조회
   async listTrends(params: ListTrendsParams): Promise<SearchResult> {
     const { page, limit, source, isNew, sort } = params;
