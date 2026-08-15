@@ -4,7 +4,7 @@ import { chunkArray } from '../common/utils/array.util';
 import { sanitizeAndFilter } from '../common/utils/text.util';
 import { delaySeconds } from '../common/utils/time.util';
 import { TechTrendRepository } from './repositories/tech-trend.repository';
-import { Article, ArticleDetails, IArticleScraper, ScrapeJobResult } from './interfaces/scraper.interface';
+import { Article, ArticleDetails, IArticleScraper, SavedArticleInfo, ScrapeJobResult } from './interfaces/scraper.interface';
 import { FinalSummaryResult } from 'ai/interfaces/ai.interface';
 import { DevToScraper } from './scrapers/devto.scraper';
 import { GeekNewsScraper } from './scrapers/geek-news.scraper';
@@ -88,7 +88,7 @@ export class TrendsPipelineService {
   // 스크래퍼 단위 처리
   private async processSource(scraper: IArticleScraper): Promise<ScrapeJobResult> {
     let totalSavedCount = 0;
-    const savedArticles: { title: string; url: string }[] = [];
+    const savedArticles: SavedArticleInfo[] = [];
 
     this.logger.log(`[Pipeline] ${scraper.sourceName} 수집 시작 | target=${this.TARGET_SAVE_COUNT}`);
 
@@ -146,7 +146,7 @@ export class TrendsPipelineService {
     batch: Article[],
     scraper: IArticleScraper,
     limit: number,
-  ): Promise<{ savedCount: number; savedArticles: { title: string; url: string }[] }> {
+  ): Promise<{ savedCount: number; savedArticles: SavedArticleInfo[] }> {
     // 본문 확보
     const articleIds = batch.map((article) => String(article.id));
 
@@ -400,13 +400,16 @@ export class TrendsPipelineService {
   }
 
   // DB 저장
-  private async saveTrends(articles: EmbeddedArticle[]): Promise<{ savedCount: number; savedArticles: { title: string; url: string }[] }> {
+  private async saveTrends(articles: EmbeddedArticle[]): Promise<{
+    savedCount: number;
+    savedArticles: SavedArticleInfo[];
+  }> {
     let savedCount = 0;
-    const savedArticles: { title: string; url: string }[] = [];
+    const savedArticles: SavedArticleInfo[] = [];
 
     for (const item of articles) {
       try {
-        await this.techTrendRepository.saveTrend({
+        const savedEntity = await this.techTrendRepository.saveTrend({
           source: item.article.source,
           source_id: String(item.article.id),
           title: item.summary.title,
@@ -423,8 +426,10 @@ export class TrendsPipelineService {
 
         savedCount++;
         savedArticles.push({
-          title: item.summary.title,
-          url: item.article.url,
+          id: savedEntity.id,
+          sourceId: savedEntity.source_id,
+          title: savedEntity.title,
+          url: savedEntity.link_url,
         });
       } catch (error: any) {
         this.logger.error(

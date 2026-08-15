@@ -24,8 +24,15 @@ export interface IArticleScraper {
   getArticleDetails(articleId: string): Promise<ArticleDetails | null>;
 }
 
+export interface SavedArticleInfo {
+  id: number;
+  sourceId: string;
+  title: string;
+  url: string;
+}
+
 export interface ScrapeJobResult {
   sourceName: string;
   savedCount: number;
-  savedArticles: { title: string; url: string }[];
+  savedArticles: SavedArticleInfo[];
 }

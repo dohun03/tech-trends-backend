@@ -4,14 +4,14 @@ import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import { ScrapeJobResult } from './interfaces/scraper.interface';
 
-@QueueEventsListener('trend-scraper-queue') // 등록한 큐 이름
+@QueueEventsListener('trend-scraper-queue')
 export class TrendQueueEventsListener extends QueueEventsHost {
   private readonly logger = new Logger(TrendQueueEventsListener.name);
 
   constructor(private readonly configService: ConfigService) {
     super();
   }
-  
+
   // 작업 성공 시 실행
   @OnQueueEvent('completed')
   async onCompleted(event: { jobId: string; returnvalue: string | ScrapeJobResult }) {
@@ -26,24 +26,32 @@ export class TrendQueueEventsListener extends QueueEventsHost {
       result = null;
     }
 
-    // 알림 메시지 본문
-    let message = `✅ **[BullMQ 스크래퍼 성공]**\n- Job ID: \`${event.jobId}\``;
+    const baseUrl = this.configService.get<string>('CLIENT_URL', 'http://localhost:3000');
 
+    // 관리자용 모니터링 알림 메시지
+    let adminMessage = `✅ **[BullMQ 스크래퍼 성공]**\n- Job ID: \`${event.jobId}\``;
     if (result) {
-      message += `\n- 수집 출처: \`${result.sourceName}\``;
-      message += `\n- 저장 건수: **${result.savedCount}개**`;
-
-      if (result.savedArticles && result.savedArticles.length > 0) {
-        message += `\n\n📌 **수집된 아티클 목록:**`;
-        result.savedArticles.forEach((article, idx) => {
-          message += `\n${idx + 1}. [${article.title}](${article.url})`;
-        });
-      } else {
-        message += `\n- *신규 아티클이 없거나 AI 평가 통과 항목이 없습니다.*`;
-      }
+      adminMessage += `\n- 수집 출처: \`${result.sourceName}\``;
+      adminMessage += `\n- 저장 건수: **${result.savedCount}개**`;
     }
 
-    await this.sendNotification(message);
+    // 유저용 아티클 알림 메시지 (우리 서비스 모달 딥링크로 연결)
+    let userMessage = '';
+    if (result && result.savedArticles && result.savedArticles.length > 0) {
+      userMessage = `📢 **[${result.sourceName}] 새로운 트렌드 아티클이 도착했습니다!**\n`;
+      result.savedArticles.forEach((article, idx) => {
+        const detailUrl = `${baseUrl}/?id=${article.id}`;
+        userMessage += `\n${idx + 1}. [${article.title}](<${detailUrl}>)`;
+      });
+    }
+
+    // 관리자 채널 발송
+    await this.sendNotification(adminMessage, 'ADMIN');
+
+    // 유저 채널 발송
+    if (userMessage) {
+      await this.sendNotification(userMessage, 'USER');
+    }
   }
 
   // 작업 실패 시 실행
@@ -51,20 +59,26 @@ export class TrendQueueEventsListener extends QueueEventsHost {
   async onFailed(event: { jobId: string; failedReason: string }) {
     this.logger.error(`[Queue Error] Job ${event.jobId} 실패: ${event.failedReason}`);
 
-    await this.sendNotification(
-      `🚨 **[BullMQ 스크래퍼 실패]**\n- Job ID: \`${event.jobId}\`\n- 사유: \`${event.failedReason}\``
-    );
+    const adminMessage = `🚨 **[BullMQ 스크래퍼 실패]**\n- Job ID: \`${event.jobId}\`\n- 사유: \`${event.failedReason}\``;
+    await this.sendNotification(adminMessage, 'ADMIN');
   }
 
-  // 공통 발송 함수
-  private async sendNotification(message: string) {
-    const webhookUrl = this.configService.get<string>('DISCORD_WEBHOOK_URL');
-    if (!webhookUrl) return;
+  /**
+   * 공통 디스코드 발송 함수 (Target 구분)
+   */
+  private async sendNotification(message: string, target: 'ADMIN' | 'USER') {
+    const envKey = target === 'ADMIN' ? 'DISCORD_ADMIN_WEBHOOK_URL' : 'DISCORD_USER_WEBHOOK_URL';
+    const webhookUrl = this.configService.get<string>(envKey);
+
+    if (!webhookUrl) {
+      this.logger.warn(`Discord Webhook URL이 설정되지 않았습니다: ${envKey}`);
+      return;
+    }
 
     try {
       await axios.post(webhookUrl, { content: message });
     } catch (err: any) {
-      this.logger.error(`Discord 발송 실패: ${err.message}`);
+      this.logger.error(`Discord (${target}) 발송 실패: ${err.message}`);
     }
   }
 }
