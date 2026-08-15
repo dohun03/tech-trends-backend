@@ -2,6 +2,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
 import { TrendsPipelineService } from './trends-pipeline.service';
+import { ScrapeJobResult } from './interfaces/scraper.interface';
 
 @Processor('trend-scraper-queue', { concurrency: 1 })
 export class TrendsWorker extends WorkerHost {
@@ -12,13 +13,17 @@ export class TrendsWorker extends WorkerHost {
   }
 
   // Redis의 스크래퍼 큐 감시 및 실행
-  async process(job: Job<{ sourceName: string }>): Promise<void> {
+  async process(job: Job<{ sourceName: string }>): Promise<ScrapeJobResult> {
     const { sourceName } = job.data;
     this.logger.log(`[Worker] 수집 작업 시작: ${sourceName} (Job ID: ${job.id})`);
 
     try {
-      await this.trendsPipelineService.executeScraperByName(sourceName);
+      const result = await this.trendsPipelineService.executeScraperByName(sourceName);
+      
       this.logger.log(`[Worker] 수집 작업 완료: ${sourceName}`);
+
+      return result;
+
     } catch (error: any) {
       this.logger.error(`[Worker] 수집 작업 실패: ${sourceName}`, error.stack);
       throw error;

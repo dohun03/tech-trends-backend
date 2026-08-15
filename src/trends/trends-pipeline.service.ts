@@ -4,7 +4,7 @@ import { chunkArray } from '../common/utils/array.util';
 import { sanitizeAndFilter } from '../common/utils/text.util';
 import { delaySeconds } from '../common/utils/time.util';
 import { TechTrendRepository } from './repositories/tech-trend.repository';
-import { Article, ArticleDetails, IArticleScraper } from './interfaces/scraper.interface';
+import { Article, ArticleDetails, IArticleScraper, ScrapeJobResult } from './interfaces/scraper.interface';
 import { FinalSummaryResult } from 'ai/interfaces/ai.interface';
 import { DevToScraper } from './scrapers/devto.scraper';
 import { GeekNewsScraper } from './scrapers/geek-news.scraper';
@@ -75,19 +75,20 @@ export class TrendsPipelineService {
   }
 
   // Worker가 큐에서 작업을 꺼내어 실행할 때 호출
-  public async executeScraperByName(sourceName: string): Promise<void> {
+  public async executeScraperByName(sourceName: string): Promise<ScrapeJobResult> {
     const scraper = this.scraperMap.get(sourceName);
     if (!scraper) {
       throw new Error(`[Pipeline] 등록되지 않은 스크래퍼 소스입니다: ${sourceName}`);
     }
 
     this.logger.log(`[Pipeline] ${sourceName} 스크래핑 파이프라인 시작`);
-    await this.processSource(scraper);
+    return await this.processSource(scraper);
   }
 
   // 스크래퍼 단위 처리
-  private async processSource(scraper: IArticleScraper): Promise<void> {
+  private async processSource(scraper: IArticleScraper): Promise<ScrapeJobResult> {
     let totalSavedCount = 0;
+    const savedArticles: { title: string; url: string }[] = [];
 
     this.logger.log(`[Pipeline] ${scraper.sourceName} 수집 시작 | target=${this.TARGET_SAVE_COUNT}`);
 
@@ -96,7 +97,7 @@ export class TrendsPipelineService {
       const articles = await scraper.getArticles();
       if (articles.length === 0) {
         this.logger.warn(`[Pipeline] ${scraper.sourceName} 수집 결과 없음`);
-        return;
+        return { sourceName: scraper.sourceName, savedCount: 0, savedArticles: [] };
       }
 
       // 이미 DB에 존재하는 아티클 제거
@@ -107,7 +108,7 @@ export class TrendsPipelineService {
 
       if (newArticles.length === 0) {
         this.logger.warn(`[Pipeline] ${scraper.sourceName} 신규 아티클 없음`);
-        return;
+        return { sourceName: scraper.sourceName, savedCount: 0, savedArticles: [] };
       }
 
       // 배치 단위 처리
@@ -121,19 +122,23 @@ export class TrendsPipelineService {
 
         const remainingQuota = this.TARGET_SAVE_COUNT - totalSavedCount;
 
-        const savedCount = await this.processBatch(
-          batch,
-          scraper,
-          remainingQuota,
-        );
+        const batchResult = await this.processBatch(batch, scraper, remainingQuota);
 
-        totalSavedCount += savedCount;
+        totalSavedCount += batchResult.savedCount;
+        savedArticles.push(...batchResult.savedArticles);
       }
 
       this.logger.log(`[Pipeline] ${scraper.sourceName} 처리 완료 | saved=${totalSavedCount}/${this.TARGET_SAVE_COUNT}`);
     } catch (error: any) {
       this.logger.error(`[Pipeline] ${scraper.sourceName} 처리 실패 | error=${error.message}`, error.stack);
+      throw error;
     }
+
+    return {
+      sourceName: scraper.sourceName,
+      savedCount: totalSavedCount,
+      savedArticles,
+    };
   }
 
   // 배치 단위 처리
@@ -141,7 +146,7 @@ export class TrendsPipelineService {
     batch: Article[],
     scraper: IArticleScraper,
     limit: number,
-  ): Promise<number> {
+  ): Promise<{ savedCount: number; savedArticles: { title: string; url: string }[] }> {
     // 본문 확보
     const articleIds = batch.map((article) => String(article.id));
 
@@ -156,7 +161,7 @@ export class TrendsPipelineService {
 
     if (validArticles.length === 0) {
       this.logger.warn(`[Pipeline] [${scraper.sourceName}] 유효 본문 없음`);
-      return 0;
+      return { savedCount: 0, savedArticles: [] };
     }
 
     // AI 가치 평가
@@ -167,7 +172,7 @@ export class TrendsPipelineService {
 
     if (valuableArticles.length === 0) {
       this.logger.warn(`[Pipeline] [${scraper.sourceName}] 가치 평가 통과 아티클 없음`);
-      return 0;
+      return { savedCount: 0, savedArticles: [] };
     }
 
     // AI 요약
@@ -179,7 +184,7 @@ export class TrendsPipelineService {
 
     if (summarizedArticles.length === 0) {
       this.logger.warn(`[Pipeline] [${scraper.sourceName}] 요약 완료 아티클 없음`);
-      return 0;
+      return { savedCount: 0, savedArticles: [] };
     }
 
     // AI 임베딩
@@ -187,7 +192,7 @@ export class TrendsPipelineService {
 
     if (embeddedArticles.length === 0) {
       this.logger.warn(`[Pipeline] [${scraper.sourceName}] 임베딩 처리 결과 없음`);
-      return 0;
+      return { savedCount: 0, savedArticles: [] };
     }
 
     // DB 저장
@@ -395,8 +400,9 @@ export class TrendsPipelineService {
   }
 
   // DB 저장
-  private async saveTrends(articles: EmbeddedArticle[]): Promise<number> {
+  private async saveTrends(articles: EmbeddedArticle[]): Promise<{ savedCount: number; savedArticles: { title: string; url: string }[] }> {
     let savedCount = 0;
+    const savedArticles: { title: string; url: string }[] = [];
 
     for (const item of articles) {
       try {
@@ -416,6 +422,10 @@ export class TrendsPipelineService {
         });
 
         savedCount++;
+        savedArticles.push({
+          title: item.summary.title,
+          url: item.article.url,
+        });
       } catch (error: any) {
         this.logger.error(
           `[Pipeline] DB 저장 실패 | source=${item.article.source}, articleId=${item.article.id}, error=${error.message}`,
@@ -426,6 +436,6 @@ export class TrendsPipelineService {
 
     this.logger.log(`[Pipeline] DB 저장 완료 | saved=${savedCount}/${articles.length}`);
 
-    return savedCount;
+    return { savedCount, savedArticles };
   }
 }
