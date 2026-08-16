@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { AiService } from '../ai/ai.service';
 import { chunkArray } from '../common/utils/array.util';
 import { sanitizeAndFilter } from '../common/utils/text.util';
@@ -11,6 +12,7 @@ import { GeekNewsScraper } from './scrapers/geek-news.scraper';
 import { StackOverflowScraper } from './scrapers/stackoverflow.scraper';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { RedisService } from 'redis/redis.service';
 
 interface SummarizedArticle {
   article: Article;
@@ -25,8 +27,13 @@ interface EmbeddedArticle extends SummarizedArticle {
 @Injectable()
 export class TrendsPipelineService {
   private readonly logger = new Logger(TrendsPipelineService.name);
-  private readonly TARGET_SAVE_COUNT = 5;
-  private readonly BATCH_SIZE = 10;
+
+  private readonly TARGET_SAVE_COUNT: number;
+  private readonly BATCH_SIZE: number;
+  private readonly REDIS_LOCK_TTL_MS: number;
+  private readonly AI_DELAY_SECONDS: number;
+  private readonly TEXT_SNIPPET_LENGTH: number;
+  private readonly TEXT_CONTENT_LENGTH: number;
 
   private readonly scraperMap: Map<string, IArticleScraper>;
 
@@ -35,10 +42,19 @@ export class TrendsPipelineService {
     private readonly scraperQueue: Queue,
     private readonly aiService: AiService,
     private readonly techTrendRepository: TechTrendRepository,
+    private readonly redisService: RedisService,
+    private readonly configService: ConfigService,
     private readonly devToScraper: DevToScraper,
     private readonly geekNewsScraper: GeekNewsScraper,
     private readonly stackOverflowScraper: StackOverflowScraper,
   ) {
+    this.TARGET_SAVE_COUNT = this.configService.get<number>('SCRAPER_TARGET_SAVE_COUNT', 5);
+    this.BATCH_SIZE = this.configService.get<number>('SCRAPER_BATCH_SIZE', 10);
+    this.REDIS_LOCK_TTL_MS = this.configService.get<number>('SCRAPER_REDIS_LOCK_TTL_MS', 600000);
+    this.AI_DELAY_SECONDS = this.configService.get<number>('SCRAPER_AI_DELAY_SECONDS', 3);
+    this.TEXT_SNIPPET_LENGTH = this.configService.get<number>('SCRAPER_TEXT_SNIPPET_LENGTH', 600);
+    this.TEXT_CONTENT_LENGTH = this.configService.get<number>('SCRAPER_TEXT_CONTENT_LENGTH', 5000);
+
     this.scraperMap = new Map<string, IArticleScraper>([
       [this.devToScraper.sourceName, this.devToScraper],
       [this.geekNewsScraper.sourceName, this.geekNewsScraper],
@@ -49,28 +65,33 @@ export class TrendsPipelineService {
   // 스크래들을 큐에 등록
   public async dispatchAllScrapersToQueue(): Promise<void> {
     for (const sourceName of this.scraperMap.keys()) {
-      const activeJobs = await this.scraperQueue.getJobs(['active', 'waiting', 'delayed']);
+      // 1차 수동락
+      const lockKey = `lock:scraper:${sourceName}`;
+      const lockValue = await this.redisService.acquireLock({
+        key: lockKey,
+        ttlMs: this.REDIS_LOCK_TTL_MS,
+      });
 
-      const isRunning = activeJobs.some((job) => job.data.sourceName === sourceName);
-
-      if (isRunning) {
-        this.logger.warn(`[Queue] ${sourceName} 작업이 이미 진행 중이므로 새 요청을 무시합니다.`);
+      if (!lockValue) {
+        this.logger.warn(`[Queue] ${sourceName} 작업이 이미 진행 중입니다. 중복 요청 무시.`);
         continue;
       }
 
-      const jobId = `${sourceName}-${Date.now()}`;
+      // 2차 자동락
+      const jobId = sourceName;
       await this.scraperQueue.add(
         'scrape-articles',
-        { sourceName },
+        { sourceName, lockValue },
         {
           jobId,
           attempts: 3,
           backoff: { type: 'exponential', delay: 5000 },
-          removeOnComplete: 10, // 💡 완료된 작업 이력은 최근 10개까지 남겨둠
-          removeOnFail: 50,
-        }
+          removeOnComplete: true,
+          removeOnFail: { count: 50 },
+        },
       );
-      this.logger.log(`[Queue] ${sourceName} 작업 등록 완료 (jobId: ${jobId})`);
+
+      this.logger.log(`[Queue] ${sourceName} 작업 신규 등록 완료 (jobId: ${jobId})`);
     }
   }
 
@@ -271,7 +292,7 @@ export class TrendsPipelineService {
       title: article.title,
       snippet: sanitizeAndFilter(
         articleDetailsMap.get(String(article.id))?.content ?? '',
-        600,
+        this.TEXT_SNIPPET_LENGTH,
       ),
     }));
 
@@ -319,7 +340,7 @@ export class TrendsPipelineService {
             title: article.title,
             content: sanitizeAndFilter(
               details.content,
-              5000,
+              this.TEXT_CONTENT_LENGTH,
             ),
           });
 
@@ -337,7 +358,7 @@ export class TrendsPipelineService {
         this.logger.log(`[Pipeline] 요약 완료 | articleId=${article.id}`);
 
         // AI API 호출 간격
-        await delaySeconds(3);
+        await delaySeconds(this.AI_DELAY_SECONDS);
       } catch (error: any) {
         // 개별 아티클 요약 실패는 다음 아티클로 진행
         this.logger.error(`[Pipeline] 요약 실패 | articleId=${article.id}, error=${error.message}`, error.stack);

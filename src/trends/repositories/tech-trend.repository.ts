@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { TechTrend } from '../entities/tech-trend.entity';
+import { ConfigService } from '@nestjs/config';
 
 type SortOrder = 'ASC' | 'DESC';
 
@@ -31,6 +32,7 @@ export class TechTrendRepository {
   constructor(
     @InjectRepository(TechTrend)
     private readonly repository: Repository<TechTrend>,
+    private readonly configService: ConfigService,
   ) {}
 
   // 출처 목록 조회
@@ -158,9 +160,9 @@ export class TechTrendRepository {
 
     const vectorString = `[${vector.join(',')}]`;
     const candidateLimit =
-      Number(process.env.SEARCH_CANDIDATE_LIMIT ?? 50); // 각 상위 50개의 결과만 반영
+      this.configService.get<number>('SEARCH_CANDIDATE_LIMIT', 50); // 각 상위 50개의 결과만 반영
     const distanceThreshold =
-      Number(process.env.VECTOR_DISTANCE_THRESHOLD ?? 0.35); // 벡터 거리 임계치
+      this.configService.get<number>('VECTOR_DISTANCE_THRESHOLD', 0.35) // 벡터 거리 임계치
     const rrfK = 60;
 
     const commonWhere = `

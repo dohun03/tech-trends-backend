@@ -52,9 +52,7 @@ export class AiService {
     });
   }
 
-  /**
-   * [공통 재시도 로직] 객체 파라미터 적용
-   */
+  // [공통 재시도 로직] 객체 파라미터 적용
   private async executeWithRetry<T>(params: ExecuteWithRetryParams<T>): Promise<T> {
     const { operation, context, maxRetries = 3, baseDelayMs = 2000 } = params;
 
@@ -123,7 +121,7 @@ export class AiService {
       return parsed.valuable_ids || [];
     } catch (error: any) {
       this.logger.error(`[AI:Groq] 배치 가치 평가 최종 실패. 빈 배열 반환 | error=${error.message}`);
-      return [];
+      throw error;
     }
   }
 
@@ -186,7 +184,7 @@ export class AiService {
       };
     } catch (error: any) {
       this.logger.error(`[AI:Groq] 단일 아티클 요약 최종 실패. null 반환 | title="${title}", error=${error.message}`);
-      return null;
+      throw error;
     }
   }
 
@@ -222,7 +220,7 @@ export class AiService {
       return embeddings.map((embedding) => embedding.values || []);
     } catch (error: any) {
       this.logger.error(`[AI:Gemini] 임베딩 일괄 생성 최종 실패. 빈 배열 반환 | error=${error.message}`);
-      return [];
+      throw error;
     }
   }
 
@@ -295,7 +293,7 @@ export class AiService {
 
   // 검색 중복 요청시 대기
   private async waitForCache(params: WaitForCacheParams): Promise<number[] | null> {
-    const { cacheKey, maxRetries = 10, delayMs = 150 } = params;
+    const { cacheKey, maxRetries = 25, delayMs = 200 } = params;
 
     for (let i = 0; i < maxRetries; i++) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));

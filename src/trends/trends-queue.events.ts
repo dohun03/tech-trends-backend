@@ -35,14 +35,23 @@ export class TrendQueueEventsListener extends QueueEventsHost {
       adminMessage += `\n- 저장 건수: **${result.savedCount}개**`;
     }
 
-    // 유저용 아티클 알림 메시지 (우리 서비스 모달 딥링크로 연결)
+    // 유저용 아티클 알림 메시지
     let userMessage = '';
     if (result && result.savedArticles && result.savedArticles.length > 0) {
       userMessage = `📢 **[${result.sourceName}] 새로운 트렌드 아티클이 도착했습니다!**\n`;
-      result.savedArticles.forEach((article, idx) => {
+      
+      for (let idx = 0; idx < result.savedArticles.length; idx++) {
+        const article = result.savedArticles[idx];
         const detailUrl = `${baseUrl}/?id=${article.id}`;
-        userMessage += `\n${idx + 1}. [${article.title}](<${detailUrl}>)`;
-      });
+        const appendStr = `\n${idx + 1}. [${article.title}](<${detailUrl}>)`;
+        
+        if (userMessage.length + appendStr.length > 1900) {
+          userMessage += `\n\n...외 **${result.savedArticles.length - idx}개**의 아티클이 더 있습니다.`;
+          break;
+        }
+        
+        userMessage += appendStr;
+      }
     }
 
     // 관리자 채널 발송
@@ -63,9 +72,7 @@ export class TrendQueueEventsListener extends QueueEventsHost {
     await this.sendNotification(adminMessage, 'ADMIN');
   }
 
-  /**
-   * 공통 디스코드 발송 함수 (Target 구분)
-   */
+  // 공통 디스코드 발송 함수
   private async sendNotification(message: string, target: 'ADMIN' | 'USER') {
     const envKey = target === 'ADMIN' ? 'DISCORD_ADMIN_WEBHOOK_URL' : 'DISCORD_USER_WEBHOOK_URL';
     const webhookUrl = this.configService.get<string>(envKey);
@@ -75,8 +82,13 @@ export class TrendQueueEventsListener extends QueueEventsHost {
       return;
     }
 
+    let safeMessage = message;
+    if (safeMessage.length > 2000) {
+      safeMessage = safeMessage.substring(0, 1950) + '\n\n... (길이 초과로 절삭됨)';
+    }
+
     try {
-      await axios.post(webhookUrl, { content: message });
+      await axios.post(webhookUrl, { content: safeMessage });
     } catch (err: any) {
       this.logger.error(`Discord (${target}) 발송 실패: ${err.message}`);
     }
