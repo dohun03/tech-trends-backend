@@ -60,7 +60,7 @@ export class GeekNewsScraper implements IArticleScraper {
 
     } catch (error: any) {
       this.logger.error(`[Scraper:GeekNews] 아티클 목록 수집 실패 | error=${error.message}`);
-      return [];
+      throw error;
     }
   }
 
@@ -91,9 +91,7 @@ export class GeekNewsScraper implements IArticleScraper {
         comment_count: commentCount,
       };
     } catch (error: any) {
-      this.logger.warn(
-        `[Scraper:GeekNews] 아티클 본문 수집 실패 | articleId=${articleId}, error=${error.message}`,
-      );
+      this.logger.warn(`[Scraper:GeekNews] 아티클 본문 수집 실패 | articleId=${articleId}, error=${error.message}`);
       return null;
     }
   }

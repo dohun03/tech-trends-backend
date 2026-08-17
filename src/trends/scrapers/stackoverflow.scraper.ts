@@ -54,17 +54,13 @@ export class StackOverflowScraper implements IArticleScraper {
         title: question.title?.trim() || '제목 없음',
         url: question.link || '',
         created_at: question.creation_date
-          ? new Date(question.creation_date * 1000).toISOString()
+          ? new Date(question.creation_date * 1000).toISOString().split('T')[0]
           : '',
         source: this.sourceName,
       }));
     } catch (error: any) {
-      this.logger.error(
-        `[Scraper:StackOverflow] 질문 목록 수집 실패 | error=${error.message}`,
-        error.stack,
-      );
-
-      return [];
+      this.logger.error(`[Scraper:StackOverflow] 질문 목록 수집 실패 | error=${error.message}`);
+      throw error;
     }
   }
 

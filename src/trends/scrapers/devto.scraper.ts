@@ -51,7 +51,7 @@ export class DevToScraper implements IArticleScraper {
 
     } catch (error: any) {
       this.logger.error(`[Scraper:DevTo] 인기 아티클 목록 수집 실패 | error=${error.message}`);
-      return [];
+      throw error;
     }
   }
 
