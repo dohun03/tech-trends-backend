@@ -120,7 +120,7 @@ export class AiService {
 
       return parsed.valuable_ids || [];
     } catch (error: any) {
-      this.logger.error(`[AI:Groq] 배치 가치 평가 최종 실패. 빈 배열 반환 | error=${error.message}`);
+      this.logger.error(`[AI:Groq] 배치 가치 평가 최종 실패. | error=${error.message}`);
       throw error;
     }
   }
@@ -183,7 +183,7 @@ export class AiService {
           : parsed.tags || null,
       };
     } catch (error: any) {
-      this.logger.error(`[AI:Groq] 단일 아티클 요약 최종 실패. null 반환 | title="${title}", error=${error.message}`);
+      this.logger.error(`[AI:Groq] 단일 아티클 요약 최종 실패. | title="${title}", error=${error.message}`);
       throw error;
     }
   }
@@ -219,7 +219,7 @@ export class AiService {
 
       return embeddings.map((embedding) => embedding.values || []);
     } catch (error: any) {
-      this.logger.error(`[AI:Gemini] 임베딩 일괄 생성 최종 실패. 빈 배열 반환 | error=${error.message}`);
+      this.logger.error(`[AI:Gemini] 임베딩 일괄 생성 최종 실패. | error=${error.message}`);
       throw error;
     }
   }
