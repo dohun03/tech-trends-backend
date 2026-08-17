@@ -21,7 +21,7 @@ interface SummarizedArticle {
 }
 
 interface EmbeddedArticle extends SummarizedArticle {
-  embeddingVector: number[] | null;
+  embeddingVector: number[];
 }
 
 @Injectable()
@@ -385,16 +385,11 @@ export class TrendsPipelineService {
 
       return articles.map((article, index) => ({
         ...article,
-        embeddingVector: embeddingVectors[index] ?? null,
+        embeddingVector: embeddingVectors[index],
       }));
     } catch (error: any) {
       this.logger.error(`[Pipeline] 임베딩 생성 실패 | error=${error.message}`, error.stack);
-
-      // 임베딩이 없어도 아티클 저장은 계속 진행
-      return articles.map((article) => ({
-        ...article,
-        embeddingVector: null,
-      }));
+      throw error;
     }
   }
 
