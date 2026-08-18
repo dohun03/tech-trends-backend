@@ -1,4 +1,4 @@
-import { Injectable, Logger, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, InternalServerErrorException, NotFoundException, HttpException } from '@nestjs/common';
 import { AiService } from 'ai/ai.service';
 import { GetTrendsQueryDto } from './dto/get-trends-query.dto';
 import { TechTrendRepository } from './repositories/tech-trend.repository';
@@ -114,8 +114,11 @@ export class TrendsQueryService {
       return article;
 
     } catch (error) {
+      if (error instanceof HttpException) throw error;
       this.logger.error(`[getTrendById] 단건 조회 에러 (ID: ${id}): ${error}`);
-      throw new InternalServerErrorException('아티클 상세 정보를 불러오는 중 에러가 발생했습니다.');
+      throw new InternalServerErrorException(
+        '아티클 상세 정보를 불러오는 중 에러가 발생했습니다.',
+      );
     }
   }
 }
