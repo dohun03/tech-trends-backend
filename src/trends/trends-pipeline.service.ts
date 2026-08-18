@@ -372,16 +372,21 @@ export class TrendsPipelineService {
   private async generateEmbeddingsForArticles(articles: SummarizedArticle[]): Promise<EmbeddedArticle[]> {
     this.logger.log(`[Pipeline] 임베딩 생성 시작 | count=${articles.length}`);
 
-    const embeddingTexts = articles.map((article) =>
-      this.buildEmbeddingText(article.summary)
-    );
+    if (articles.length === 0) return [];
 
     try {
-      const embeddingVectors =
-        await this.aiService.vectorEmbeddingWithAi({
-          texts: embeddingTexts,
-          taskType: 'RETRIEVAL_DOCUMENT',
-        });
+      const embeddingTexts = articles.map((article) =>
+        this.buildEmbeddingText(article.summary)
+      );
+
+      const embeddingVectors = await this.aiService.vectorEmbeddingWithAi({
+        texts: embeddingTexts,
+        taskType: 'RETRIEVAL_DOCUMENT',
+      });
+
+      if (articles.length !== embeddingVectors.length) {
+        throw new Error(`[Pipeline] 임베딩 개수 불일치! (요청: ${articles.length}개, 응답: ${embeddingVectors.length}개)`);
+      }
 
       return articles.map((article, index) => ({
         ...article,

@@ -174,6 +174,22 @@ describe('TrendsPipelineService', () => {
         'Embedding Service Down',
       );
     });
+
+    it('[임베딩-개수불일치] AI 임베딩 결과 개수와 요청 아티클 개수가 다르면 예외를 던져야 한다', async () => {
+      aiService.filterBatchWithAi.mockResolvedValue(['101']);
+      aiService.summarizeContentWithAi.mockResolvedValue({
+        title: '제목',
+        short_summary: ['요약'],
+        long_summary: '상세',
+        tags: 'NestJS',
+      });
+
+      aiService.vectorEmbeddingWithAi.mockResolvedValue([]);
+
+      await expect(pipelineService.executeScraperByName('DEVTO')).rejects.toThrow(
+        '[Pipeline] 임베딩 개수 불일치!',
+      );
+    });
   });
 
   describe('부분 에러 발생 시 개별 스킵(Skip) 처리 검증', () => {
