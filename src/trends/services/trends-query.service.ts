@@ -1,7 +1,8 @@
 import { Injectable, Logger, InternalServerErrorException, NotFoundException, HttpException } from '@nestjs/common';
 import { AiService } from 'ai/ai.service';
-import { GetTrendsQueryDto } from './dto/get-trends-query.dto';
-import { TechTrendRepository } from './repositories/tech-trend.repository';
+import { GetTrendsQueryDto } from 'trends/dto/get-trends-query.dto';
+import { TechTrendRepository } from 'trends/repositories/tech-trend.repository';
+
 
 @Injectable()
 export class TrendsQueryService {

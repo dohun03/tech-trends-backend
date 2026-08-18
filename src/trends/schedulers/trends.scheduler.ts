@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { TrendsPipelineService } from './trends-pipeline.service';
+import { TrendsPipelineService } from '../services/trends-pipeline.service';
 
 @Injectable()
 export class TrendsScheduler {

@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { TrendsQueryService } from './trends-query.service';
-import { TechTrendRepository } from './repositories/tech-trend.repository';
+import { TechTrendRepository } from '../repositories/tech-trend.repository';
 import { AiService } from 'ai/ai.service';
 import { InternalServerErrorException, NotFoundException } from '@nestjs/common';
 

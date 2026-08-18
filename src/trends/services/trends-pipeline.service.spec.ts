@@ -2,12 +2,12 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
 import { TrendsPipelineService } from './trends-pipeline.service';
-import { TechTrendRepository } from './repositories/tech-trend.repository';
-import { DevToScraper } from './scrapers/devto.scraper';
-import { GeekNewsScraper } from './scrapers/geek-news.scraper';
-import { StackOverflowScraper } from './scrapers/stackoverflow.scraper';
-import { Article, ArticleDetails } from './interfaces/scraper.interface';
-import { AiService } from '../ai/ai.service';
+import { TechTrendRepository } from '../repositories/tech-trend.repository';
+import { DevToScraper } from '../scrapers/devto.scraper';
+import { GeekNewsScraper } from '../scrapers/geek-news.scraper';
+import { StackOverflowScraper } from '../scrapers/stackoverflow.scraper';
+import { Article, ArticleDetails } from '../interfaces/scraper.interface';
+import { AiService } from '../../ai/ai.service';
 import { RedisService } from 'redis/redis.service';
 
 describe('TrendsPipelineService', () => {

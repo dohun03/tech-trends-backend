@@ -2,7 +2,7 @@ import { OnQueueEvent, QueueEventsHost, QueueEventsListener } from '@nestjs/bull
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
-import { ScrapeJobResult } from './interfaces/scraper.interface';
+import { ScrapeJobResult } from '../interfaces/scraper.interface';
 
 @QueueEventsListener('trend-scraper-queue')
 export class TrendQueueEventsListener extends QueueEventsHost {

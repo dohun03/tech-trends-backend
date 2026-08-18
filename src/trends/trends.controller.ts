@@ -1,7 +1,7 @@
 import { Controller, Get, Param, Query, ParseIntPipe } from '@nestjs/common';
-import { TrendsPipelineService } from './trends-pipeline.service';
-import { TrendsQueryService } from './trends-query.service';
+import { TrendsPipelineService } from './services/trends-pipeline.service';
 import { GetTrendsQueryDto } from './dto/get-trends-query.dto';
+import { TrendsQueryService } from './services/trends-query.service';
 
 @Controller('api')
 export class TrendsController {

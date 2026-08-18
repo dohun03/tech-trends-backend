@@ -1,8 +1,8 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
-import { TrendsPipelineService } from './trends-pipeline.service';
-import { ScrapeJobResult } from './interfaces/scraper.interface';
+import { TrendsPipelineService } from '../services/trends-pipeline.service';
+import { ScrapeJobResult } from '../interfaces/scraper.interface';
 import { RedisService } from 'redis/redis.service';
 
 @Processor('trend-scraper-queue', { concurrency: 1 })
