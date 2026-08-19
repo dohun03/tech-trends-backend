@@ -3,6 +3,7 @@ import Parser from 'rss-parser';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Article, ArticleDetails, IArticleScraper } from '../interfaces/scraper.interface';
+import { delaySeconds } from 'common/utils/time.util';
 
 @Injectable()
 export class GeekNewsScraper implements IArticleScraper {
@@ -11,7 +12,10 @@ export class GeekNewsScraper implements IArticleScraper {
   private readonly GEEKNEWS_TOPIC_URL = 'https://news.hada.io/topic';
   private readonly HEADERS = {
     'User-Agent':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    'Accept':
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
   };
   public readonly sourceName = 'geeknews';
 
@@ -67,6 +71,9 @@ export class GeekNewsScraper implements IArticleScraper {
   // 게시글 ID의 본문 및 통계 정보 수집
   async getArticleDetails(articleId: string): Promise<ArticleDetails | null> {
     try {
+      const randomDelaySeconds = (Math.floor(Math.random() * 1500) + 2000) / 1000;
+      await delaySeconds(randomDelaySeconds);
+
       const targetUrl = `${this.GEEKNEWS_TOPIC_URL}?id=${articleId}`;
 
       const response = await axios.get(targetUrl, {

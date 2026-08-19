@@ -1,9 +1,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { GeekNewsScraper } from './geek-news.scraper';
 import axios from 'axios';
+import * as timeUtil from 'common/utils/time.util';
 
 jest.mock('axios');
 const mockedAxios = axios as jest.Mocked<typeof axios>;
+
+jest.mock('common/utils/time.util', () => ({
+  delaySeconds: jest.fn().mockResolvedValue(undefined),
+}));
 
 describe('GeekNewsScraper', () => {
   let scraper: GeekNewsScraper;
@@ -32,7 +37,6 @@ describe('GeekNewsScraper', () => {
         ],
       };
 
-      // internal parser mocking
       jest.spyOn((scraper as any).parser, 'parseURL').mockResolvedValueOnce(mockFeed);
 
       const result = await scraper.getArticles();

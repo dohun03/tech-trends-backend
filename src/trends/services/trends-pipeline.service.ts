@@ -48,12 +48,12 @@ export class TrendsPipelineService {
     private readonly geekNewsScraper: GeekNewsScraper,
     private readonly stackOverflowScraper: StackOverflowScraper,
   ) {
-    this.TARGET_SAVE_COUNT = this.configService.get<number>('SCRAPER_TARGET_SAVE_COUNT', 5);
-    this.BATCH_SIZE = this.configService.get<number>('SCRAPER_BATCH_SIZE', 10);
-    this.REDIS_LOCK_TTL_MS = this.configService.get<number>('SCRAPER_REDIS_LOCK_TTL_MS', 600000);
-    this.AI_DELAY_SECONDS = this.configService.get<number>('SCRAPER_AI_DELAY_SECONDS', 3);
-    this.TEXT_SNIPPET_LENGTH = this.configService.get<number>('SCRAPER_TEXT_SNIPPET_LENGTH', 600);
-    this.TEXT_CONTENT_LENGTH = this.configService.get<number>('SCRAPER_TEXT_CONTENT_LENGTH', 5000);
+    this.TARGET_SAVE_COUNT = Number(this.configService.get('SCRAPER_TARGET_SAVE_COUNT', 5));
+    this.BATCH_SIZE = Number(this.configService.get('SCRAPER_BATCH_SIZE', 10));
+    this.REDIS_LOCK_TTL_MS = Number(this.configService.get('SCRAPER_REDIS_LOCK_TTL_MS', 600000));
+    this.AI_DELAY_SECONDS = Number(this.configService.get('SCRAPER_AI_DELAY_SECONDS', 3));
+    this.TEXT_SNIPPET_LENGTH = Number(this.configService.get('SCRAPER_TEXT_SNIPPET_LENGTH', 600));
+    this.TEXT_CONTENT_LENGTH = Number(this.configService.get('SCRAPER_TEXT_CONTENT_LENGTH', 5000));
 
     this.scraperMap = new Map<string, IArticleScraper>([
       [this.devToScraper.sourceName, this.devToScraper],
@@ -251,29 +251,15 @@ export class TrendsPipelineService {
     scraper: IArticleScraper,
     articleIds: string[],
   ): Promise<Map<string, ArticleDetails>> {
-    const results = await Promise.allSettled(
-      articleIds.map(async (id) => ({
-        id,
-        details: await scraper.getArticleDetails(id),
-      })),
-    );
+    const articleDetailsMap = new Map<string, ArticleDetails>();
 
-    const articleDetailsMap = new Map<
-      string,
-      ArticleDetails
-    >();
-
-    results.forEach((result) => {
-      if (result.status !== 'fulfilled') {
-        return;
-      }
-
-      const { id, details } = result.value;
+    for (const id of articleIds) {
+      const details = await scraper.getArticleDetails(id);
 
       if (details?.content) {
         articleDetailsMap.set(id, details);
       }
-    });
+    }
 
     return articleDetailsMap;
   }
