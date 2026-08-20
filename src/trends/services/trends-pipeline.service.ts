@@ -62,10 +62,9 @@ export class TrendsPipelineService {
     ]);
   }
 
-  // 스크래들을 큐에 등록
+  // 스크래퍼들을 큐에 등록
   public async dispatchAllScrapersToQueue(): Promise<void> {
     for (const sourceName of this.scraperMap.keys()) {
-      // 1차 수동락
       const lockKey = `lock:scraper:${sourceName}`;
       const lockValue = await this.redisService.acquireLock({
         key: lockKey,
@@ -77,7 +76,6 @@ export class TrendsPipelineService {
         continue;
       }
 
-      // 2차 자동락
       const jobId = sourceName;
       await this.scraperQueue.add(
         'scrape-articles',
@@ -102,8 +100,21 @@ export class TrendsPipelineService {
       throw new Error(`[Pipeline] 등록되지 않은 스크래퍼 소스입니다: ${sourceName}`);
     }
 
+    const pipelineStartTime = Date.now();
     this.logger.log(`[Pipeline] ${sourceName} 스크래핑 파이프라인 시작`);
-    return await this.processSource(scraper);
+
+    try {
+      const result = await this.processSource(scraper);
+      
+      const totalDuration = Date.now() - pipelineStartTime;
+      this.logger.log(`[Pipeline] ${sourceName} 스크래핑 파이프라인 성공 종료 | 총소요시간=${(totalDuration / 1000).toFixed(2)}초`);
+      
+      return result;
+    } catch (error: any) {
+      const totalDuration = Date.now() - pipelineStartTime;
+      this.logger.error(`[Pipeline] ${sourceName} 스크래핑 파이프라인 실패 종료 (총소요시간=${(totalDuration / 1000).toFixed(2)}초)`);
+      throw error;
+    }
   }
 
   // 스크래퍼 단위 처리
@@ -111,7 +122,7 @@ export class TrendsPipelineService {
     let totalSavedCount = 0;
     const savedArticles: SavedArticleInfo[] = [];
 
-    this.logger.log(`[Pipeline] ${scraper.sourceName} 수집 시작 | target=${this.TARGET_SAVE_COUNT}`);
+    this.logger.log(`[Pipeline] ${scraper.sourceName} 수집 시작 | targetGoal=${this.TARGET_SAVE_COUNT}, batchSize=${this.BATCH_SIZE}`);
 
     try {
       // 외부 소스에서 아티클 목록 수집
@@ -135,18 +146,29 @@ export class TrendsPipelineService {
       // 배치 단위 처리
       const batches = chunkArray(newArticles, this.BATCH_SIZE);
 
-      for (const batch of batches) {
+      this.logger.log(`[Pipeline] ${scraper.sourceName} 청크 분할 완료 | 총 신규: ${newArticles.length}개 -> ${batches.length}개 배치 생성 (배치당 최대 ${this.BATCH_SIZE}개)`);
+
+      for (let index = 0; index < batches.length; index++) {
+        const batch = batches[index];
+
         if (totalSavedCount >= this.TARGET_SAVE_COUNT) {
-          this.logger.log(`[Pipeline] ${scraper.sourceName} 목표 수량 달성 | saved=${totalSavedCount}`);
+          this.logger.log(`[Pipeline] ${scraper.sourceName} 목표 수량 달성 | saved=${totalSavedCount}/${this.TARGET_SAVE_COUNT}`);
           break;
         }
 
         const remainingQuota = this.TARGET_SAVE_COUNT - totalSavedCount;
 
+        this.logger.debug(
+          `[Pipeline] [${scraper.sourceName}] 배치 (${index + 1}/${batches.length}) 진행 중 | 대상 ${batch.length}개 | 목표 잔여: ${remainingQuota}개:\n` +
+          batch.map((a) => `  - [ID: ${a.id}] ${a.title}`).join('\n')
+        );
+
         const batchResult = await this.processBatch(batch, scraper, remainingQuota);
 
         totalSavedCount += batchResult.savedCount;
         savedArticles.push(...batchResult.savedArticles);
+
+        this.logger.log(`[Pipeline] [${scraper.sourceName}] 배치 (${index + 1}/${batches.length}) 저장 완료 | 이번 배치 저장: ${batchResult.savedCount}개 | 누적 저장: ${totalSavedCount}/${this.TARGET_SAVE_COUNT}개`);
       }
 
       this.logger.log(`[Pipeline] ${scraper.sourceName} 처리 완료 | saved=${totalSavedCount}/${this.TARGET_SAVE_COUNT}`);
@@ -179,6 +201,8 @@ export class TrendsPipelineService {
     const validArticles = batch.filter((article) =>
       articleDetailsMap.has(String(article.id)),
     );
+
+    this.logger.debug(`[Pipeline] [${scraper.sourceName}] 본문 수집 성공: ${validArticles.length}/${batch.length}개`);
 
     if (validArticles.length === 0) {
       this.logger.warn(`[Pipeline] [${scraper.sourceName}] 유효 본문 없음`);
@@ -241,7 +265,11 @@ export class TrendsPipelineService {
       (article) => !existingIds.has(String(article.id)),
     );
 
-    this.logger.log(`[Pipeline] 중복 검증 완료 | source=${sourceName}, raw=${articles.length}, new=${newArticles.length}`);
+    this.logger.log(`[Pipeline] 중복 검증 완료 | source=${sourceName}, raw=${articles.length}, existing=${existingIds.size}, new=${newArticles.length}`);
+
+    if (existingIds.size > 0) {
+      this.logger.debug(`[Pipeline] 기존 DB 존재로 제외된 ID: [${Array.from(existingIds).join(', ')}]`);
+    }
 
     return newArticles;
   }
@@ -258,6 +286,9 @@ export class TrendsPipelineService {
 
       if (details?.content) {
         articleDetailsMap.set(id, details);
+        this.logger.debug(`[Pipeline] 본문 수집 완료 | articleId=${id}`);
+      } else {
+        this.logger.warn(`[Pipeline] 본문 수집 실패: 내용 없음 | articleId=${id}`);
       }
     }
 
@@ -292,6 +323,13 @@ export class TrendsPipelineService {
 
     this.logger.log(`[Pipeline] AI 가치 평가 완료 | input=${articles.length}, selected=${valuableArticles.length}`);
 
+    if (valuableArticles.length > 0) {
+      this.logger.debug(
+        `[Pipeline] AI 가치 평가 통과 목록:\n` +
+        valuableArticles.map((a) => `  - [ID: ${a.id}] ${a.title}`).join('\n')
+      );
+    }
+
     return valuableArticles;
   }
 
@@ -309,6 +347,7 @@ export class TrendsPipelineService {
 
     for (const article of articles) {
       if (summarizedArticles.length >= limit) {
+        this.logger.debug(`[Pipeline] 배치 잔여 쿼터(${limit}개) 달성으로 다음 요약 취소`);
         break;
       }
 
@@ -321,6 +360,8 @@ export class TrendsPipelineService {
       }
 
       try {
+        this.logger.debug(`[Pipeline] AI 요약 수행 중... | ID=${article.id}, 원문제목="${article.title}"`);
+
         const summary =
           await this.aiService.summarizeContentWithAi({
             title: article.title,
@@ -341,12 +382,11 @@ export class TrendsPipelineService {
           summary,
         });
 
-        this.logger.log(`[Pipeline] 요약 완료 | articleId=${article.id}`);
+        this.logger.log(`[Pipeline] 요약 완료 | articleId=${article.id}, 가공제목="${summary.title}"`);
 
-        // AI API 호출 간격
+        // API 호출 간격
         await delaySeconds(this.AI_DELAY_SECONDS);
       } catch (error: any) {
-        // 개별 아티클 요약 실패는 다음 아티클로 진행
         this.logger.error(`[Pipeline] 요약 실패 | articleId=${article.id}, error=${error.message}`, error.stack);
       }
     }
@@ -373,6 +413,8 @@ export class TrendsPipelineService {
       if (articles.length !== embeddingVectors.length) {
         throw new Error(`[Pipeline] 임베딩 개수 불일치! (요청: ${articles.length}개, 응답: ${embeddingVectors.length}개)`);
       }
+
+      this.logger.log(`[Pipeline] 임베딩 생성 완료 | ${embeddingVectors.length}개 벡터 반환됨`);
 
       return articles.map((article, index) => ({
         ...article,
@@ -438,6 +480,8 @@ export class TrendsPipelineService {
           title: savedEntity.title,
           url: savedEntity.link_url,
         });
+
+        this.logger.debug(`[Pipeline] DB 저장 완료 | DB_ID=${savedEntity.id}, SourceID=${savedEntity.source_id}, 제목="${savedEntity.title}"`);
       } catch (error: any) {
         this.logger.error(
           `[Pipeline] DB 저장 실패 | source=${item.article.source}, articleId=${item.article.id}, error=${error.message}`,

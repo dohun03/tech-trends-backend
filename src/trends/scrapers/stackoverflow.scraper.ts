@@ -16,8 +16,9 @@ export class StackOverflowScraper implements IArticleScraper {
   // 최근 일주일간 인기 질문 수집
   async getArticles(): Promise<Article[]> {
     try {
-      this.logger.log(`[Scraper:StackOverflow] 인기 질문 수집 시작 | minScore=${this.MIN_SCORE}`);
+      this.logger.debug(`[Scraper:StackOverflow] 인기 질문 수집 시작 | minScore=${this.MIN_SCORE}`);
 
+      const startTime = Date.now();
       const response = await axios.get(
         `${this.STACKOVERFLOW_API_URL}/questions`,
         {
@@ -33,6 +34,8 @@ export class StackOverflowScraper implements IArticleScraper {
         },
       );
 
+      this.logger.debug(`[Scraper:StackOverflow] 질문 목록 네트워크 요청 완료 | 소요시간=${Date.now() - startTime}ms`);
+
       const questions = response.data?.items;
 
       if (!Array.isArray(questions)) {
@@ -45,7 +48,7 @@ export class StackOverflowScraper implements IArticleScraper {
         .filter((question: any) => (question.score ?? 0) >= this.MIN_SCORE)
         .sort((a: any, b: any) => (b.score ?? 0) - (a.score ?? 0));
 
-      this.logger.log(
+      this.logger.debug(
         `[Scraper:StackOverflow] 인기 질문 필터링 완료 | total=${questions.length}, filtered=${filteredQuestions.length}`,
       );
 
@@ -69,6 +72,7 @@ export class StackOverflowScraper implements IArticleScraper {
     articleId: string,
   ): Promise<ArticleDetails | null> {
     try {
+      const startTime = Date.now();
       const response = await axios.get(
         `${this.STACKOVERFLOW_API_URL}/questions/${articleId}`,
         {
@@ -80,6 +84,8 @@ export class StackOverflowScraper implements IArticleScraper {
           timeout: 5000,
         },
       );
+
+      this.logger.debug(`[Scraper:StackOverflow] 질문 상세 네트워크 요청 완료 | articleId=${articleId}, 소요시간=${Date.now() - startTime}ms`);
 
       const question = response.data?.items?.[0];
       if (!question) return null;

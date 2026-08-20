@@ -17,8 +17,9 @@ export class DevToScraper implements IArticleScraper {
   // DEV.to에서 1주일 트렌딩(인기) 글 목록 조회
   async getArticles(): Promise<Article[]> {
     try {
-      this.logger.log(`[Scraper:DevTo] 인기 아티클 목록 수집 시작 | minReactions=${this.MIN_REACTIONS}, minComments=${this.MIN_COMMENTS}`);
+      this.logger.debug(`[Scraper:DevTo] 인기 아티클 목록 수집 시작 | minReactions=${this.MIN_REACTIONS}, minComments=${this.MIN_COMMENTS}`);
       
+      const startTime = Date.now();
       const response = await axios.get(
         `${this.DEVTO_API_URL}?top=7&per_page=100`,
         {
@@ -26,6 +27,9 @@ export class DevToScraper implements IArticleScraper {
           timeout: 5000,
         },
       );
+      
+      this.logger.debug(`[Scraper:DevTo] 아티클 목록 네트워크 요청 완료 | 소요시간=${Date.now() - startTime}ms`);
+
       const articles = response.data;
       if (!Array.isArray(articles)) return [];
 
@@ -39,7 +43,7 @@ export class DevToScraper implements IArticleScraper {
       // 좋아요 순으로 내림차순 정렬
       filteredArticles.sort((a: any, b: any) => (b.positive_reactions_count || 0) - (a.positive_reactions_count || 0));
 
-      this.logger.log(`[Scraper:DevTo] 인기 아티클 품질 필터링 완료 | total=${articles.length}, filtered=${filteredArticles.length}`);
+      this.logger.debug(`[Scraper:DevTo] 인기 아티클 품질 필터링 완료 | total=${articles.length}, filtered=${filteredArticles.length}`);
 
       return filteredArticles.map((article: any) => ({
         id: String(article.id),
@@ -58,10 +62,13 @@ export class DevToScraper implements IArticleScraper {
   // 게시글 ID의 본문 스크래핑
   async getArticleDetails(articleId: string): Promise<ArticleDetails | null> {
     try {
+      const startTime = Date.now();
       const response = await axios.get(`${this.DEVTO_API_URL}/${articleId}`, {
         headers: this.HEADERS,
         timeout: 5000,
       });
+
+      this.logger.debug(`[Scraper:DevTo] 본문 상세 네트워크 요청 완료 | articleId=${articleId}, 소요시간=${Date.now() - startTime}ms`);
 
       const data = response.data;
       const content = data?.body_markdown?.trim();

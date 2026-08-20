@@ -76,7 +76,7 @@ export class AiService {
     throw new Error('Unreachable code');
   }
 
-  // GROQ(QWEN) AI 평가 (객체 파라미터)
+  // AI 평가
   async filterBatchWithAi(params: FilterBatchParams): Promise<string[]> {
     const { items } = params;
 
@@ -98,9 +98,12 @@ export class AiService {
     }
     `;
 
+    this.logger.debug(`[AI:Groq-Filter] 가치 평가 API 호출 | 대상=${items.length}개, 프롬프트길이=${prompt.length}자`);
+
     try {
       const parsed = await this.executeWithRetry({
         operation: async () => {
+          const startTime = Date.now();
           const response = await this.groq.chat.completions.create({
             model: this.groqModelName,
             messages: [{ role: 'user', content: prompt }],
@@ -109,6 +112,8 @@ export class AiService {
             max_completion_tokens: 4096,
             reasoning_effort: 'none',
           });
+
+          this.logger.debug(`[AI:Groq-Filter] API 응답 수신 완료 | 소요시간=${Date.now() - startTime}ms`);
 
           const raw = response.choices[0]?.message?.content;
           if (!raw) throw new Error('AI 응답이 비어 있습니다.');
@@ -125,7 +130,7 @@ export class AiService {
     }
   }
 
-  // GROQ(QWEN) AI 요약 (객체 파라미터)
+  // AI 요약
   async summarizeContentWithAi(params: SummarizeContentParams): Promise<FinalSummaryResult | null> {
     const { title, content } = params;
 
@@ -152,9 +157,12 @@ export class AiService {
     }
     `;
 
+    this.logger.debug(`[AI:Groq-Summarize] 요약 API 호출 | 제목="${title.substring(0, 30)}...", 본문길이=${content.length}자`);
+
     try {
       const parsed = await this.executeWithRetry({
         operation: async () => {
+          const startTime = Date.now();
           const response = await this.groq.chat.completions.create({
             model: this.groqModelName,
             messages: [{ role: 'user', content: prompt }],
@@ -163,6 +171,8 @@ export class AiService {
             max_completion_tokens: 4096,
             reasoning_effort: 'none',
           });
+
+          this.logger.debug(`[AI:Groq-Summarize] API 응답 수신 완료 | 소요시간=${Date.now() - startTime}ms`);
 
           const raw = response.choices[0]?.message?.content;
           if (!raw) throw new Error('AI 응답이 비어 있습니다.');
@@ -188,16 +198,19 @@ export class AiService {
     }
   }
 
-  // GEMINI AI 벡터 임베딩
+  // AI 벡터 임베딩
   async vectorEmbeddingWithAi({
     texts,
     taskType = 'RETRIEVAL_DOCUMENT',
   }: VectorEmbeddingParams): Promise<number[][]> {
     if (!texts || texts.length === 0) return [];
 
+    this.logger.debug(`[AI:Gemini-Embedding] 일괄 임베딩 요청 | 요청 개수=${texts.length}개`);
+
     try {
       const embeddings = await this.executeWithRetry({
         operation: async () => {
+          const startTime = Date.now();
           const response = await this.gemini.models.embedContent({
             model: this.embeddingModelName,
             contents: texts,
@@ -206,6 +219,8 @@ export class AiService {
               taskType,
             },
           });
+
+          this.logger.debug(`[AI:Gemini-Embedding] API 응답 수신 완료 | 소요시간=${Date.now() - startTime}ms`);
 
           if (!response.embeddings || response.embeddings.length === 0) {
             throw new Error('임베딩 결과가 비어 있습니다.');
@@ -224,7 +239,7 @@ export class AiService {
     }
   }
 
-  // GEMINI AI 벡터 임베딩 (검색 기능)
+  // AI 벡터 임베딩 검색
   async embedSearchQuery(query: string): Promise<number[] | null> {
     if (!query || !query.trim()) return null;
 
@@ -236,7 +251,7 @@ export class AiService {
       // Redis 캐시 확인
       const cachedVector = await this.redisService.getCache<number[]>({ key: cacheKey });
       if (cachedVector && Array.isArray(cachedVector) && cachedVector.length > 0) {
-        this.logger.log(`[Embedding Cache HIT] key="${cacheKey}"`);
+        this.logger.debug(`[Embedding Cache HIT] key="${cacheKey}"`);
         return cachedVector; // 캐시값 바로 리턴
       }
 
@@ -247,13 +262,13 @@ export class AiService {
       });
 
       if (!lockValue) {
-        this.logger.log(`[Embedding Lock Waiting] 다른 요청이 캐시 생성 중입니다. key="${cacheKey}"`);
+        this.logger.debug(`[Embedding Lock Waiting] 다른 요청이 캐시 생성 중입니다. key="${cacheKey}"`);
         return await this.waitForCache({ cacheKey });
       }
 
       // 락 획득 성공
       try {
-        this.logger.log(`[Embedding Cache MISS] API 호출 진행 (락 선점) key="${cacheKey}"`);
+        this.logger.debug(`[Embedding Cache MISS] API 호출 진행 (락 선점) key="${cacheKey}"`);
         const vectors = await this.vectorEmbeddingWithAi({
           texts: [normalizedQuery],
           taskType: 'RETRIEVAL_QUERY',
@@ -300,7 +315,7 @@ export class AiService {
 
       const cachedVector = await this.redisService.getCache<number[]>({ key: cacheKey });
       if (cachedVector && Array.isArray(cachedVector) && cachedVector.length > 0) {
-        this.logger.log(`[Embedding Lock Resolved] 대기 후 캐시 획득 성공! key="${cacheKey}"`);
+        this.logger.debug(`[Embedding Lock Resolved] 대기 후 캐시 획득 성공! key="${cacheKey}"`);
         return cachedVector;
       }
     }

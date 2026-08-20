@@ -36,9 +36,12 @@ export class GeekNewsScraper implements IArticleScraper {
   // 최신 아티클 목록 수집 (RSS 사용)
   async getArticles(): Promise<Article[]> {
     try {
-      this.logger.log(`[Scraper:GeekNews] 아티클 목록 수집 시작 | url=${this.GEEKNEWS_RSS_URL}`);
+      this.logger.debug(`[Scraper:GeekNews] 아티클 목록 수집 시작 | url=${this.GEEKNEWS_RSS_URL}`);
 
+      const startTime = Date.now();
       const feed = await this.parser.parseURL(this.GEEKNEWS_RSS_URL);
+      
+      this.logger.debug(`[Scraper:GeekNews] 아티클 목록 네트워크 요청(RSS) 완료 | 소요시간=${Date.now() - startTime}ms`);
 
       if (!feed.items || feed.items.length === 0) {
         this.logger.warn(`[Scraper:GeekNews] 수집된 아티클 항목이 없습니다.`);
@@ -59,7 +62,7 @@ export class GeekNewsScraper implements IArticleScraper {
         };
       });
 
-      this.logger.log(`[Scraper:GeekNews] 아티클 목록 수집 완료 | total=${articles.length}`);
+      this.logger.debug(`[Scraper:GeekNews] 아티클 목록 수집 완료 | total=${articles.length}`);
       return articles;
 
     } catch (error: any) {
@@ -76,10 +79,14 @@ export class GeekNewsScraper implements IArticleScraper {
 
       const targetUrl = `${this.GEEKNEWS_TOPIC_URL}?id=${articleId}`;
 
+      const startTime = Date.now();
       const response = await axios.get(targetUrl, {
         headers: this.HEADERS,
         timeout: 5000,
       });
+
+      this.logger.debug(`[Scraper:GeekNews] 본문 상세 네트워크 요청 완료 | articleId=${articleId}, 소요시간=${Date.now() - startTime}ms`);
+
       if (!response.data) return null;
 
       const $ = cheerio.load(response.data);
