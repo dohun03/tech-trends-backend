@@ -20,6 +20,7 @@ services:
       - TZ=Asia/Seoul
     volumes:
       - /etc/localtime:/etc/localtime:ro
+      - ./logs:/usr/src/app/logs
     depends_on:
       - postgres
       - redis

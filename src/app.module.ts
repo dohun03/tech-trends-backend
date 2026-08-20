@@ -7,9 +7,12 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { DatabaseModule } from './database/database.module';
 import { TrendsModule } from 'trends/trends.module';
 import { BullModule } from '@nestjs/bullmq';
+import { WinstonModule } from 'nest-winston';
+import { winstonLoggerOptions } from './common/config/logger.config';
 
 @Module({
   imports: [
+    WinstonModule.forRoot(winstonLoggerOptions),
     ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true, 
