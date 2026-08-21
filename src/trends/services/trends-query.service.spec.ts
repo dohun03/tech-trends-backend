@@ -39,15 +39,15 @@ describe('TrendsQueryService', () => {
     jest.clearAllMocks();
   });
 
-  describe('getTrends', () => {
-    it('검색어가 없으면 listTrends를 호출하고 페이지네이션 메타데이터를 계산하여 반환해야 한다', async () => {
+  describe('listTrends', () => {
+    it('listTrends를 호출하고 페이지네이션 메타데이터를 계산하여 반환해야 한다', async () => {
       const mockResult = {
         data: [{ id: 1, title: '테스트 아티클' }],
         totalCount: 12,
       };
       repository.listTrends.mockResolvedValue(mockResult as any);
 
-      const result = await service.getTrends({});
+      const result = await service.listTrends({});
 
       expect(repository.listTrends).toHaveBeenCalledWith({
         page: 1,
@@ -67,6 +67,16 @@ describe('TrendsQueryService', () => {
       });
     });
 
+    it('처리 중 에러 발생 시 InternalServerErrorException을 던져야 한다', async () => {
+      repository.listTrends.mockRejectedValue(new Error('DB 에러'));
+
+      await expect(service.listTrends({})).rejects.toThrow(
+        InternalServerErrorException,
+      );
+    });
+  });
+
+  describe('searchTrends', () => {
     it('검색어가 존재하고 AI 벡터 임베딩이 있으면 searchHybrid를 호출해야 한다', async () => {
       const mockVector = [0.1, 0.2, 0.3];
       const mockResult = { data: [{ id: 1 }], totalCount: 1 };
@@ -74,8 +84,8 @@ describe('TrendsQueryService', () => {
       aiService.embedSearchQuery.mockResolvedValue(mockVector);
       repository.searchHybrid.mockResolvedValue(mockResult as any);
 
-      const result = await service.getTrends({
-        search: '  NestJS  ', // 공백 제거 검증
+      const result = await service.searchTrends({
+        search: '  NestJS  ', 
         page: 2,
         limit: 10,
       });
@@ -99,7 +109,7 @@ describe('TrendsQueryService', () => {
       aiService.embedSearchQuery.mockResolvedValue([]); // 빈 벡터
       repository.searchKeyword.mockResolvedValue(mockResult as any);
 
-      const result = await service.getTrends({ search: 'Redis' });
+      const result = await service.searchTrends({ search: 'Redis' });
 
       expect(aiService.embedSearchQuery).toHaveBeenCalledWith('Redis');
       expect(repository.searchKeyword).toHaveBeenCalledWith({
@@ -113,12 +123,14 @@ describe('TrendsQueryService', () => {
       expect(result.meta.totalPages).toBe(1);
     });
 
-    it('처리 중 에러 발생 시 InternalServerErrorException을 던져야 한다', async () => {
-      repository.listTrends.mockRejectedValue(new Error('DB 에러'));
+    it('AI 임베딩 결과가 null(API 실패/타임아웃)이면 searchKeyword를 호출해야 한다', async () => {
+      aiService.embedSearchQuery.mockResolvedValue(null);
+      repository.searchKeyword.mockResolvedValue({ data: [], totalCount: 0 } as any);
 
-      await expect(service.getTrends({})).rejects.toThrow(
-        InternalServerErrorException,
-      );
+      await service.searchTrends({ search: 'Redis' });
+
+      expect(repository.searchKeyword).toHaveBeenCalled();
+      expect(repository.searchHybrid).not.toHaveBeenCalled();
     });
   });
 

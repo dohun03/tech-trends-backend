@@ -1,7 +1,7 @@
-import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 
-export class GetTrendsQueryDto {
+export class BaseTrendsQueryDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt({ message: 'page는 정수여야 합니다.' })
@@ -17,18 +17,10 @@ export class GetTrendsQueryDto {
 
   @IsOptional()
   @IsString()
-  search?: string = '';
-
-  @IsOptional()
-  @IsString()
   source?: string = 'ALL';
 
   @IsOptional()
   @Transform(({ value }) => value === 'true' || value === true)
   @IsBoolean()
   isNew?: boolean = false;
-
-  @IsOptional()
-  @IsIn(['ASC', 'DESC'], { message: 'sort는 ASC 또는 DESC만 허용됩니다.' })
-  sort?: 'ASC' | 'DESC' = 'DESC';
 }

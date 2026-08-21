@@ -36,11 +36,12 @@ import { winstonLoggerOptions } from './common/config/logger.config';
       name: 'trend-scraper-queue',
     }),
 
-    // 10초에 10번으로 요청 제한
+    // 전역 설정은 1분에 100번으로 요청 제한
     ThrottlerModule.forRoot([
       {
-        ttl: 10000,
-        limit: 10,
+        name: 'global',
+        ttl: 60000,
+        limit: 100,
       },
     ]),
     DatabaseModule,

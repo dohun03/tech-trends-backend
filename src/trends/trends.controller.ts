@@ -1,7 +1,9 @@
 import { Controller, Get, Param, Query, ParseIntPipe } from '@nestjs/common';
 import { TrendsPipelineService } from './services/trends-pipeline.service';
-import { GetTrendsQueryDto } from './dto/get-trends-query.dto';
+import { ListTrendsQueryDto } from './dto/list-trends-query.dto';
 import { TrendsQueryService } from './services/trends-query.service';
+import { Throttle } from '@nestjs/throttler';
+import { SearchTrendsQueryDto } from './dto/search-trends-query.dto';
 
 @Controller('api')
 export class TrendsController {
@@ -10,10 +12,17 @@ export class TrendsController {
     private readonly trendsPipelineService: TrendsPipelineService,
   ) {}
 
-  // 트렌드 목록 / 검색 공통 진입점
+  // 트렌드 목록
   @Get('trends')
-  getTrends(@Query() query: GetTrendsQueryDto) {
-    return this.trendsQueryService.getTrends(query);
+  getTrends(@Query() query: ListTrendsQueryDto) {
+    return this.trendsQueryService.listTrends(query);
+  }
+
+  // 검색
+  @Throttle({ default: { limit: 5, ttl: 10000 } })
+  @Get('trends/search')
+  searchTrends(@Query() query: SearchTrendsQueryDto) {
+    return this.trendsQueryService.searchTrends(query);
   }
 
   // 출처 목록 조회

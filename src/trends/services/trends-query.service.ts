@@ -1,6 +1,7 @@
 import { Injectable, Logger, InternalServerErrorException, NotFoundException, HttpException } from '@nestjs/common';
 import { AiService } from 'ai/ai.service';
-import { GetTrendsQueryDto } from 'trends/dto/get-trends-query.dto';
+import { ListTrendsQueryDto } from 'trends/dto/list-trends-query.dto';
+import { SearchTrendsQueryDto } from 'trends/dto/search-trends-query.dto';
 import { TechTrendRepository } from 'trends/repositories/tech-trend.repository';
 
 
@@ -13,85 +14,44 @@ export class TrendsQueryService {
     private readonly aiService: AiService,
   ) {}
 
-  async getTrends(query: GetTrendsQueryDto) {
+  // 일반 목록 조회
+  async listTrends(query: ListTrendsQueryDto) {
     try {
-      const {
-        page = 1,
-        limit = 5,
-        search = '',
-        source = 'ALL',
-        isNew = false,
-        sort = 'DESC',
-      } = query;
+      const { page = 1, limit = 5, source = 'ALL', isNew = false, sort = 'DESC' } = query;
+      const result = await this.techTrendRepository.listTrends({ page, limit, source, isNew, sort });
 
-      // 검색어가 있으면 검색 흐름으로 진입
-      if (search.trim()) {
-        return await this.searchTrends({
-          page,
-          limit,
-          search: search.trim(),
-          source,
-          isNew,
-        });
-      }
-
-      // 검색어가 없으면 일반 목록 조회
-      return await this.listTrends({
-        page,
-        limit,
-        source,
-        isNew,
-        sort,
-      });
+      return {
+        data: result.data,
+        meta: {
+          totalCount: result.totalCount,
+          totalPages: Math.ceil(result.totalCount / limit),
+          itemsPerPage: limit,
+          currentPage: page,
+        },
+      };
     } catch (error) {
-      this.logger.error(`[getTrends] 데이터 조회 중 에러 발생: ${error}`);
-      throw new InternalServerErrorException('트렌드 데이터를 불러오는 중 서버 오류가 발생했습니다.');
+      this.logger.error(`[listTrends] 조회 에러: ${error}`);
+      throw new InternalServerErrorException('트렌드 목록 조회 중 에러가 발생했습니다.');
     }
   }
 
-  // 일반 목록 조회
-  private async listTrends(query: {
-    page: number;
-    limit: number;
-    source: string;
-    isNew: boolean;
-    sort: 'ASC' | 'DESC';
-  }) {
-    const result = await this.techTrendRepository.listTrends(query);
-
-    return {
-      data: result.data,
-      meta: {
-        totalCount: result.totalCount,
-        totalPages: Math.ceil(result.totalCount / query.limit),
-        itemsPerPage: query.limit,
-        currentPage: query.page,
-      },
-    };
-  }
-
   // 검색 분기 처리
-  private async searchTrends(query: {
-    page: number;
-    limit: number;
-    search: string;
-    source: string;
-    isNew: boolean;
-  }) {
-    const vector = await this.aiService.embedSearchQuery(query.search);
+  async searchTrends(query: SearchTrendsQueryDto) {
+    const { page = 1, limit = 5, search, source = 'ALL', isNew = false } = query;
 
-    // 벡터 검색 결과가 있으면 하이브리드 검색, 없으면 키워드로만 검색
+    const vector = await this.aiService.embedSearchQuery(search.trim());
+
     const result = vector && vector.length > 0
-      ? await this.techTrendRepository.searchHybrid({ ...query, vector })
-      : await this.techTrendRepository.searchKeyword(query);
+      ? await this.techTrendRepository.searchHybrid({ page, limit, search: search.trim(), source, isNew, vector })
+      : await this.techTrendRepository.searchKeyword({ page, limit, search: search.trim(), source, isNew });
 
     return {
       data: result.data,
       meta: {
         totalCount: result.totalCount,
-        totalPages: Math.ceil(result.totalCount / query.limit),
-        itemsPerPage: query.limit,
-        currentPage: query.page,
+        totalPages: Math.ceil(result.totalCount / limit),
+        itemsPerPage: limit,
+        currentPage: page,
       },
     };
   }
