@@ -153,7 +153,7 @@ describe('AiService', () => {
   });
 
   describe('embedSearchQuery', () => {
-    const query = 'NestJS Redis';
+    const query = '  NestJS    Redis  ';
     const cacheKey = 'emb:text-embedding-004:nestjs redis';
 
     it('시나리오 A: 캐시가 존재하면 API 호출 없이 캐시값을 반환해야 한다 (Cache Hit)', async () => {
@@ -163,14 +163,14 @@ describe('AiService', () => {
       const result = await service.embedSearchQuery(query);
 
       expect(result).toEqual(cachedVector);
-      expect(mockGeminiEmbed).not.toHaveBeenCalled(); // API 호출 안함
-      expect(redisService.acquireLock).not.toHaveBeenCalled(); // 락 시도 안함
+      expect(mockGeminiEmbed).not.toHaveBeenCalled(); 
+      expect(redisService.acquireLock).not.toHaveBeenCalled(); 
     });
 
     it('시나리오 B: 캐시가 없고 락을 획득하면, API를 호출하고 캐시를 저장한 뒤 락을 해제해야 한다', async () => {
-      redisService.getCache.mockResolvedValue(null); // 캐시 없음
-      redisService.acquireLock.mockResolvedValue('mock-uuid-lock'); // 락 획득 성공
-      mockGeminiEmbed.mockResolvedValue({ embeddings: [{ values: [0.1, 0.1, 0.1] }] }); // API 성공
+      redisService.getCache.mockResolvedValue(null);
+      redisService.acquireLock.mockResolvedValue('mock-uuid-lock');
+      mockGeminiEmbed.mockResolvedValue({ embeddings: [{ values: [0.1, 0.1, 0.1] }] });
 
       const result = await service.embedSearchQuery(query);
 
@@ -185,20 +185,28 @@ describe('AiService', () => {
     });
 
     it('시나리오 C: 락 획득에 실패하면, 대기(waitForCache) 후 생성된 캐시를 반환해야 한다', async () => {
-      // 1. 첫 번째 getCache: 캐시 없음
-      // 2. waitForCache 내부 루프 안에서의 getCache: 1회차엔 없음, 2회차엔 캐시 생김
       redisService.getCache
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce([0.2, 0.2, 0.2]);
 
-      redisService.acquireLock.mockResolvedValue(null); // 락 획득 실패 (다른 요청이 처리 중)
+      redisService.acquireLock.mockResolvedValue(null); 
 
       const result = await service.embedSearchQuery(query);
 
       expect(result).toEqual([0.2, 0.2, 0.2]);
-      expect(mockGeminiEmbed).not.toHaveBeenCalled(); // 나는 API 호출 안함
-      expect(redisService.setCache).not.toHaveBeenCalled(); // 나는 캐시 저장 안함
+      expect(mockGeminiEmbed).not.toHaveBeenCalled(); 
+      expect(redisService.setCache).not.toHaveBeenCalled(); 
+    });
+
+    it('시나리오 D: API 호출 중 에러가 발생하면 에러를 던지지 않고 null을 반환해야 한다', async () => {
+      redisService.getCache.mockResolvedValue(null);
+      redisService.acquireLock.mockResolvedValue('mock-lock');
+      mockGeminiEmbed.mockRejectedValue(new Error('Gemini API quota exceeded'));
+
+      const result = await service.embedSearchQuery(query);
+
+      expect(result).toBeNull(); 
     });
   });
 });

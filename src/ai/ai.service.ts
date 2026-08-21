@@ -10,6 +10,7 @@ import {
 } from './interfaces/ai.interface';
 import { RedisService } from 'redis/redis.service';
 import { ConfigService } from '@nestjs/config';
+import { Semaphore } from 'async-mutex';
 
 interface ExecuteWithRetryParams<T> {
   operation: () => Promise<T>;
@@ -27,6 +28,7 @@ interface WaitForCacheParams {
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
+  private readonly semaphore = new Semaphore(3);
 
   private groq: Groq;
   private gemini: GoogleGenAI;
@@ -248,14 +250,14 @@ export class AiService {
     const lockKey = `lock:${cacheKey}`;
 
     try {
-      // Redis 캐시 확인
+      // 캐시 확인
       const cachedVector = await this.redisService.getCache<number[]>({ key: cacheKey });
       if (cachedVector && Array.isArray(cachedVector) && cachedVector.length > 0) {
         this.logger.debug(`[Embedding Cache HIT] key="${cacheKey}"`);
-        return cachedVector; // 캐시값 바로 리턴
+        return cachedVector;
       }
 
-      // 락 획득 시도 (UUID 토큰 획득)
+      // 락 획득 시도
       const lockValue = await this.redisService.acquireLock({
         key: lockKey,
         ttlMs: 10000, // 10초
@@ -269,9 +271,12 @@ export class AiService {
       // 락 획득 성공
       try {
         this.logger.debug(`[Embedding Cache MISS] API 호출 진행 (락 선점) key="${cacheKey}"`);
-        const vectors = await this.vectorEmbeddingWithAi({
-          texts: [normalizedQuery],
-          taskType: 'RETRIEVAL_QUERY',
+        
+        const vectors = await this.semaphore.runExclusive(async () => {
+          return await this.vectorEmbeddingWithAi({
+            texts: [normalizedQuery],
+            taskType: 'RETRIEVAL_QUERY',
+          });
         });
 
         const vector = vectors.length > 0 && vectors[0].length > 0 ? vectors[0] : null;
@@ -286,7 +291,7 @@ export class AiService {
 
         return vector;
       } finally {
-        // 캐싱 완료 후 락 해제
+        // 락 반납
         await this.redisService.releaseLock({
           key: lockKey,
           value: lockValue,
@@ -300,10 +305,14 @@ export class AiService {
 
   // 검색 키워드 정규화
   private normalizeKeyword(keyword: string): string {
+    if (!keyword) return '';
+
     return keyword
-      .trim()
       .toLowerCase()
-      .replace(/\s+/g, ' ');
+      .replace(/(에 대해|대해서|알려줘|뭐야|무엇인가요|검색해줘|찾아줘|설명해줘|알려주세요)$/g, '')
+      .replace(/[^\w\sㄱ-ㅎ가-힣+#.-]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   // 검색 중복 요청시 대기
