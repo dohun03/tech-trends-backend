@@ -2,6 +2,7 @@ import { Injectable, Logger, InternalServerErrorException, NotFoundException, Ht
 import { AiService } from 'ai/ai.service';
 import { ListTrendsQueryDto } from 'trends/dto/list-trends-query.dto';
 import { SearchTrendsQueryDto } from 'trends/dto/search-trends-query.dto';
+import { TechTrend } from 'trends/entities/tech-trend.entity';
 import { TechTrendRepository } from 'trends/repositories/tech-trend.repository';
 
 
@@ -37,13 +38,22 @@ export class TrendsQueryService {
 
   // 검색 분기 처리
   async searchTrends(query: SearchTrendsQueryDto) {
-    const { page = 1, limit = 5, search, source = 'ALL', isNew = false } = query;
+    const { page = 1, limit = 5, search, source = 'ALL', isNew = false, searchType = 'hybrid' } = query;
 
-    const vector = await this.aiService.embedSearchQuery(search.trim());
+    let result: { data: TechTrend[]; totalCount: number };
 
-    const result = vector && vector.length > 0
-      ? await this.techTrendRepository.searchHybrid({ page, limit, search: search.trim(), source, isNew, vector })
-      : await this.techTrendRepository.searchKeyword({ page, limit, search: search.trim(), source, isNew });
+    // 단순 키워드 검색
+    if (searchType === 'keyword') {
+      result = await this.techTrendRepository.searchKeyword({ page, limit, search: search.trim(), source, isNew });
+    } 
+    // 하이브리드 검색
+    else {
+      const vector = await this.aiService.embedSearchQuery(search.trim());
+
+      result = vector && vector.length > 0
+        ? await this.techTrendRepository.searchHybrid({ page, limit, search: search.trim(), source, isNew, vector })
+        : await this.techTrendRepository.searchKeyword({ page, limit, search: search.trim(), source, isNew });
+    }
 
     return {
       data: result.data,

@@ -132,6 +132,34 @@ describe('TrendsQueryService', () => {
       expect(repository.searchKeyword).toHaveBeenCalled();
       expect(repository.searchHybrid).not.toHaveBeenCalled();
     });
+
+    it('searchType이 "keyword"일 경우 AI 임베딩을 생략하고 바로 searchKeyword를 호출해야 한다', async () => {
+      const mockResult = { data: [{ id: 3, title: '키워드 검색 테스트' }], totalCount: 1 };
+      
+      repository.searchKeyword.mockResolvedValue(mockResult as any);
+
+      const result = await service.searchTrends({ 
+        search: ' NestJS ',
+        searchType: 'keyword',
+        page: 1, 
+        limit: 5 
+      });
+
+      expect(aiService.embedSearchQuery).not.toHaveBeenCalled();
+      
+      expect(repository.searchKeyword).toHaveBeenCalledWith({
+        page: 1,
+        limit: 5,
+        search: 'NestJS',
+        source: 'ALL',
+        isNew: false,
+      });
+      
+      expect(repository.searchHybrid).not.toHaveBeenCalled();
+      
+      expect(result.data).toEqual(mockResult.data);
+      expect(result.meta.totalCount).toBe(1);
+    });
   });
 
   describe('getUniqueSources', () => {
