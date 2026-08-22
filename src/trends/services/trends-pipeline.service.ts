@@ -7,9 +7,7 @@ import { delaySeconds } from '../../common/utils/time.util';
 import { TechTrendRepository } from '../repositories/tech-trend.repository';
 import { Article, ArticleDetails, IArticleScraper, SavedArticleInfo, ScrapeJobResult } from '../interfaces/scraper.interface';
 import { FinalSummaryResult } from 'ai/interfaces/ai.interface';
-import { DevToScraper } from '../scrapers/devto.scraper';
-import { GeekNewsScraper } from '../scrapers/geek-news.scraper';
-import { StackOverflowScraper } from '../scrapers/stackoverflow.scraper';
+import { ScraperFactory } from '../scrapers/scraper.factory';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { RedisService } from 'redis/redis.service';
@@ -35,8 +33,6 @@ export class TrendsPipelineService {
   private readonly TEXT_SNIPPET_LENGTH: number;
   private readonly TEXT_CONTENT_LENGTH: number;
 
-  private readonly scraperMap: Map<string, IArticleScraper>;
-
   constructor(
     @InjectQueue('trend-scraper-queue')
     private readonly scraperQueue: Queue,
@@ -44,9 +40,7 @@ export class TrendsPipelineService {
     private readonly techTrendRepository: TechTrendRepository,
     private readonly redisService: RedisService,
     private readonly configService: ConfigService,
-    private readonly devToScraper: DevToScraper,
-    private readonly geekNewsScraper: GeekNewsScraper,
-    private readonly stackOverflowScraper: StackOverflowScraper,
+    private readonly scraperFactory: ScraperFactory,
   ) {
     this.TARGET_SAVE_COUNT = Number(this.configService.get('SCRAPER_TARGET_SAVE_COUNT', 5));
     this.BATCH_SIZE = Number(this.configService.get('SCRAPER_BATCH_SIZE', 10));
@@ -54,17 +48,11 @@ export class TrendsPipelineService {
     this.AI_DELAY_SECONDS = Number(this.configService.get('SCRAPER_AI_DELAY_SECONDS', 3));
     this.TEXT_SNIPPET_LENGTH = Number(this.configService.get('SCRAPER_TEXT_SNIPPET_LENGTH', 600));
     this.TEXT_CONTENT_LENGTH = Number(this.configService.get('SCRAPER_TEXT_CONTENT_LENGTH', 5000));
-
-    this.scraperMap = new Map<string, IArticleScraper>([
-      [this.devToScraper.sourceName, this.devToScraper],
-      [this.geekNewsScraper.sourceName, this.geekNewsScraper],
-      [this.stackOverflowScraper.sourceName, this.stackOverflowScraper],
-    ]);
   }
 
   // 스크래퍼들을 큐에 등록
   public async dispatchAllScrapersToQueue(): Promise<void> {
-    for (const sourceName of this.scraperMap.keys()) {
+    for (const sourceName of this.scraperFactory.getAllSourceNames()) {
       const lockKey = `lock:scraper:${sourceName}`;
       const lockValue = await this.redisService.acquireLock({
         key: lockKey,
@@ -95,10 +83,7 @@ export class TrendsPipelineService {
 
   // Worker가 큐에서 작업을 꺼내어 실행할 때 호출
   public async executeScraperByName(sourceName: string): Promise<ScrapeJobResult> {
-    const scraper = this.scraperMap.get(sourceName);
-    if (!scraper) {
-      throw new Error(`[Pipeline] 등록되지 않은 스크래퍼 소스입니다: ${sourceName}`);
-    }
+    const scraper = this.scraperFactory.getScraper(sourceName);
 
     const pipelineStartTime = Date.now();
     this.logger.log(`[Pipeline] ${sourceName} 스크래핑 파이프라인 시작`);

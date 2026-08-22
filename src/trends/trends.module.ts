@@ -10,6 +10,7 @@ import { TechTrendRepository } from './repositories/tech-trend.repository';
 import { DevToScraper } from './scrapers/devto.scraper';
 import { GeekNewsScraper } from './scrapers/geek-news.scraper';
 import { StackOverflowScraper } from './scrapers/stackoverflow.scraper';
+import { ScraperFactory } from './scrapers/scraper.factory';
 import { RedisModule } from 'redis/redis.module';
 import { BullModule } from '@nestjs/bullmq';
 import { TrendsWorker } from './processors/trends.worker';
@@ -43,6 +44,7 @@ import { TrendQueueEventsListener } from './processors/trends-queue.events';
     TrendsWorker,
     TrendsScheduler,
     TrendQueueEventsListener,
+    ScraperFactory,
     DevToScraper,
     GeekNewsScraper,
     StackOverflowScraper,
