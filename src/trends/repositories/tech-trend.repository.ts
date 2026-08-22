@@ -3,15 +3,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { TechTrend } from '../entities/tech-trend.entity';
 import { ConfigService } from '@nestjs/config';
-
-type SortOrder = 'ASC' | 'DESC';
+import { SortOption } from '../dto/list-trends-query.dto';
 
 interface ListTrendsParams {
   page: number;
   limit: number;
   source: string;
   isNew: boolean;
-  sort: SortOrder;
+  sort: SortOption;
 }
 
 interface SearchParams {
@@ -20,6 +19,7 @@ interface SearchParams {
   search: string;
   source: string;
   isNew: boolean;
+  sort?: SortOption;
 }
 
 interface SearchResult {
@@ -85,9 +85,37 @@ export class TechTrendRepository {
       qb.andWhere("trend.mined_at < CURRENT_DATE + INTERVAL '1 day'");
     }
 
-    // 목록은 날짜순
-    qb.orderBy('trend.created_at', sort)
-      .addOrderBy('trend.id', sort)
+    switch (sort) {
+      case 'MINED_DESC':
+        qb.orderBy('trend.mined_at', 'DESC')
+          .addOrderBy('trend.created_at', 'DESC');
+        break;
+      case 'MINED_ASC':
+        qb.orderBy('trend.mined_at', 'ASC')
+          .addOrderBy('trend.created_at', 'ASC');
+        break;
+      case 'LIKE_DESC':
+        qb.orderBy('trend.like_count', 'DESC', 'NULLS LAST')
+          .addOrderBy('trend.created_at', 'DESC');
+        break;
+      case 'VIEW_DESC':
+        qb.orderBy('trend.view_count', 'DESC', 'NULLS LAST')
+          .addOrderBy('trend.created_at', 'DESC');
+        break;
+      case 'COMMENT_DESC':
+        qb.orderBy('trend.comment_count', 'DESC', 'NULLS LAST')
+          .addOrderBy('trend.created_at', 'DESC');
+        break;
+      case 'CREATED_ASC':
+        qb.orderBy('trend.created_at', 'ASC');
+        break;
+      case 'CREATED_DESC':
+      default:
+        qb.orderBy('trend.created_at', 'DESC');
+        break;
+    }
+
+    qb.addOrderBy('trend.id', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
@@ -96,10 +124,40 @@ export class TechTrendRepository {
     return { data, totalCount };
   }
 
-  // 키워드 검색만 수행
+  // 키워드 검색
   async searchKeyword(params: SearchParams): Promise<SearchResult> {
-    const { page, limit, search, source, isNew } = params;
+    const { page, limit, search, source, isNew, sort = 'RELEVANCE' } = params;
     const offset = (page - 1) * limit;
+
+    let orderByClause = 'ORDER BY relevance_score DESC, trend.created_at DESC, trend.id DESC';
+    
+    switch (sort) {
+      case 'CREATED_DESC':
+        orderByClause = 'ORDER BY trend.created_at DESC, trend.id DESC';
+        break;
+      case 'CREATED_ASC':
+        orderByClause = 'ORDER BY trend.created_at ASC, trend.id ASC';
+        break;
+      case 'MINED_DESC':
+        orderByClause = 'ORDER BY trend.mined_at DESC, trend.created_at DESC, trend.id DESC';
+        break;
+      case 'MINED_ASC':
+        orderByClause = 'ORDER BY trend.mined_at ASC, trend.created_at ASC, trend.id ASC';
+        break;
+      case 'LIKE_DESC':
+        orderByClause = 'ORDER BY trend.like_count DESC NULLS LAST, trend.created_at DESC, trend.id DESC';
+        break;
+      case 'VIEW_DESC':
+        orderByClause = 'ORDER BY trend.view_count DESC NULLS LAST, trend.created_at DESC, trend.id DESC';
+        break;
+      case 'COMMENT_DESC':
+        orderByClause = 'ORDER BY trend.comment_count DESC NULLS LAST, trend.created_at DESC, trend.id DESC';
+        break;
+      case 'RELEVANCE':
+      default:
+        orderByClause = 'ORDER BY relevance_score DESC, trend.created_at DESC, trend.id DESC';
+        break;
+    }
 
     const whereClause = `
       WHERE
@@ -129,7 +187,7 @@ export class TechTrendRepository {
         ts_rank(trend.search_document, plainto_tsquery('simple', $1)) AS relevance_score
       FROM tbl_tech_trends trend
       ${whereClause}
-      ORDER BY relevance_score DESC, trend.created_at DESC, trend.id DESC
+      ${orderByClause} /* [수정] 가변 정렬 구문 적용 */
       LIMIT $4 OFFSET $5
     `;
 
@@ -153,7 +211,7 @@ export class TechTrendRepository {
     };
   }
 
-  // 키워드 + 벡터 하이브리드 검색
+  // 키워드 + 벡터 하이브리드 검색 (RRF 스코어로 고정 정렬)
   async searchHybrid(params: SearchParams & { vector: number[] }): Promise<SearchResult> {
     const { page, limit, search, source, isNew, vector } = params;
     const offset = (page - 1) * limit;
@@ -162,7 +220,7 @@ export class TechTrendRepository {
     const candidateLimit =
       this.configService.get<number>('SEARCH_CANDIDATE_LIMIT', 50); // 각 상위 50개의 결과만 반영
     const distanceThreshold =
-      this.configService.get<number>('VECTOR_DISTANCE_THRESHOLD', 0.35) // 벡터 거리 임계치
+      this.configService.get<number>('VECTOR_DISTANCE_THRESHOLD', 0.35); // 벡터 거리 임계치
     const rrfK = 60;
 
     const commonWhere = `

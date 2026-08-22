@@ -5,7 +5,6 @@ import { SearchTrendsQueryDto } from 'trends/dto/search-trends-query.dto';
 import { TechTrend } from 'trends/entities/tech-trend.entity';
 import { TechTrendRepository } from 'trends/repositories/tech-trend.repository';
 
-
 @Injectable()
 export class TrendsQueryService {
   private readonly logger = new Logger(TrendsQueryService.name);
@@ -18,7 +17,7 @@ export class TrendsQueryService {
   // 일반 목록 조회
   async listTrends(query: ListTrendsQueryDto) {
     try {
-      const { page = 1, limit = 5, source = 'ALL', isNew = false, sort = 'DESC' } = query;
+      const { page = 1, limit = 5, source = 'ALL', isNew = false, sort = 'CREATED_DESC' } = query;
       const result = await this.techTrendRepository.listTrends({ page, limit, source, isNew, sort });
 
       return {
@@ -38,21 +37,21 @@ export class TrendsQueryService {
 
   // 검색 분기 처리
   async searchTrends(query: SearchTrendsQueryDto) {
-    const { page = 1, limit = 5, search, source = 'ALL', isNew = false, searchType = 'hybrid' } = query;
+    const { page = 1, limit = 5, search, source = 'ALL', isNew = false, searchType = 'hybrid', sort = 'RELEVANCE' } = query;
 
     let result: { data: TechTrend[]; totalCount: number };
 
-    // 단순 키워드 검색
+    // 단순 키워드 검색 (정렬 선택 가능)
     if (searchType === 'keyword') {
-      result = await this.techTrendRepository.searchKeyword({ page, limit, search: search.trim(), source, isNew });
+      result = await this.techTrendRepository.searchKeyword({ page, limit, search: search.trim(), source, isNew, sort });
     } 
-    // 하이브리드 검색
+    // 하이브리드 검색 (RRF 점수 기반이므로 정확도순 고정)
     else {
       const vector = await this.aiService.embedSearchQuery(search.trim());
 
       result = vector && vector.length > 0
         ? await this.techTrendRepository.searchHybrid({ page, limit, search: search.trim(), source, isNew, vector })
-        : await this.techTrendRepository.searchKeyword({ page, limit, search: search.trim(), source, isNew });
+        : await this.techTrendRepository.searchKeyword({ page, limit, search: search.trim(), source, isNew, sort });
     }
 
     return {

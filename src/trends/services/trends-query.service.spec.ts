@@ -54,13 +54,13 @@ describe('TrendsQueryService', () => {
         limit: 5,
         source: 'ALL',
         isNew: false,
-        sort: 'DESC',
+        sort: 'CREATED_DESC',
       });
       expect(result).toEqual({
         data: mockResult.data,
         meta: {
           totalCount: 12,
-          totalPages: 3, // Math.ceil(12 / 5) = 3
+          totalPages: 3,
           itemsPerPage: 5,
           currentPage: 1,
         },
@@ -85,7 +85,7 @@ describe('TrendsQueryService', () => {
       repository.searchHybrid.mockResolvedValue(mockResult as any);
 
       const result = await service.searchTrends({
-        search: '  NestJS  ', 
+        search: '   NestJS   ', 
         page: 2,
         limit: 10,
       });
@@ -118,6 +118,7 @@ describe('TrendsQueryService', () => {
         search: 'Redis',
         source: 'ALL',
         isNew: false,
+        sort: 'RELEVANCE',
       });
       expect(repository.searchHybrid).not.toHaveBeenCalled();
       expect(result.meta.totalPages).toBe(1);
@@ -153,6 +154,7 @@ describe('TrendsQueryService', () => {
         search: 'NestJS',
         source: 'ALL',
         isNew: false,
+        sort: 'RELEVANCE',
       });
       
       expect(repository.searchHybrid).not.toHaveBeenCalled();
